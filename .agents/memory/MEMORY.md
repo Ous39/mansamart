@@ -1,0 +1,3 @@
+- [GambiaMart full-stack architecture](gambiamart-architecture.md) — JWT auth (Bearer token in AsyncStorage), Drizzle ORM on PostgreSQL, all screens use useQuery + apiRequest via lib/query-client.ts
+- [Products schema columns](gambiamart-schema.md) — products table has colors/features as jsonb arrays, added via drizzle-kit push after initial seed; seed doesn't include them so must update via SQL
+- [Query key URL convention](gambiamart-query-keys.md) — queryKey array joined with "/" to form URL: ["/api/products", id] → /api/products/{id}
