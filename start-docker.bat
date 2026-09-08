@@ -8,5 +8,5 @@ if not exist .env.docker (
   echo For phone testing, edit .env.docker and set LAN_IP to your computer Wi-Fi IPv4 address.
 )
 
-docker compose --env-file .env.docker up --build
+docker compose --env-file .env.docker -f infrastructure/docker-compose.yml up --build
 pause
