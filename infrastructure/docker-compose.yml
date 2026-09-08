@@ -39,6 +39,15 @@ services:
       CORS_ORIGINS: http://localhost:4173,http://localhost:4174,http://localhost:8081,http://localhost:8082,http://localhost:8083
       ADMIN_CORS_ORIGINS: http://localhost:4174
       SEED_ON_START: ${SEED_ON_START:-true}
+      WAVE_ENABLED: ${WAVE_ENABLED:-false}
+      WAVE_GMD_CONFIRMED: ${WAVE_GMD_CONFIRMED:-false}
+      WAVE_API_BASE_URL: https://api.wave.com
+      WAVE_API_KEY: ${WAVE_API_KEY:-}
+      WAVE_REQUEST_SIGNING_SECRET: ${WAVE_REQUEST_SIGNING_SECRET:-}
+      WAVE_WEBHOOK_SECRET: ${WAVE_WEBHOOK_SECRET:-}
+      WAVE_CURRENCY: ${WAVE_CURRENCY:-GMD}
+      WAVE_SUCCESS_URL: https://mansamart.gm/payment/wave/success
+      WAVE_ERROR_URL: https://mansamart.gm/payment/wave/error
     ports: ["5000:5000"]
     volumes:
       - ..:/workspace

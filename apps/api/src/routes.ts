@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { calculateDeliveryFee, calculateOrderTotal } from "@mansamart/business-logic";
 import { db } from "./db";
 import {
   users, sessions, products, services, orders, bookings,
@@ -20,6 +21,7 @@ import {
 } from "./auth";
 import { z } from "zod";
 import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
+import { registerPaymentRoutes } from "./payments/routes";
 
 type RealtimePayload = Record<string, any>;
 type RealtimeEmitter = (event: string, payload: RealtimePayload, rooms?: string[]) => void;
@@ -455,6 +457,8 @@ async function computeProfileCompletion(user: any) {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+
+  registerPaymentRoutes(app);
 
   // ────────────────────────────────────────────────────────────────
   // FILE UPLOADS - Expo/mobile friendly base64 image upload
@@ -1050,34 +1054,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(o);
   });
 
-  app.post("/api/orders", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/orders", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const schema = z.object({
         items: z.array(z.object({
           productId: z.string(),
-          vendorId: z.string().optional().nullable(),
-          name: z.string(),
-          price: z.number(),
-          quantity: z.number(),
-          image: z.string().optional(),
+          quantity: z.number().int().min(1).max(99),
           selectedColor: z.string().optional().nullable(),
           selectedSize: z.string().optional().nullable(),
           selectedVariant: z.string().optional().nullable(),
           selectedOptions: z.record(z.any()).optional(),
-          category: z.string().optional().nullable(),
-          subcategory: z.string().optional().nullable(),
-          sku: z.string().optional().nullable(),
-          productType: z.string().optional().nullable(),
-          vendorName: z.string().optional().nullable(),
-        })),
-        subtotal: z.number(),
-        shipping: z.number(),
-        total: z.number(),
+        })).min(1).max(100),
         address: z.string(),
         city: z.string(),
         phone: z.string(),
-        paymentMethod: z.string(),
+        paymentMethod: z.literal("wave"),
         fulfillmentType: z.enum(["delivery", "pickup"]).default("delivery"),
         deliveryLatitude: z.number().optional(),
         deliveryLongitude: z.number().optional(),
@@ -1085,7 +1077,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notes: z.string().optional(),
       });
       const data = schema.parse(req.body);
-      const [o] = await db.insert(orders).values({ ...data, userId: user.id, fulfillmentType: data.fulfillmentType }).returning();
+      const productIds = [...new Set(data.items.map((item) => item.productId))];
+      const currentProducts = await db.select().from(products).where(inArray(products.id, productIds));
+      const productById = new Map(currentProducts.map((product) => [product.id, product]));
+      const requestedQuantityByProduct = data.items.reduce((quantities, item) => {
+        quantities.set(item.productId, (quantities.get(item.productId) || 0) + item.quantity);
+        return quantities;
+      }, new Map<string, number>());
+      for (const [productId, quantity] of requestedQuantityByProduct) {
+        const product = productById.get(productId);
+        if (!product) throw new Error("Product is no longer available");
+        if (!product.inStock || product.stock < quantity) throw new Error(`Product is out of stock: ${product.name}`);
+      }
+      const authoritativeItems = data.items.map((item) => {
+        const product = productById.get(item.productId);
+        if (!product) throw new Error("Product is no longer available");
+        return {
+          productId: product.id,
+          vendorId: product.vendorId,
+          name: product.name,
+          price: product.price,
+          quantity: item.quantity,
+          image: product.images?.[0],
+          selectedColor: item.selectedColor,
+          selectedSize: item.selectedSize,
+          selectedVariant: item.selectedVariant,
+          selectedOptions: item.selectedOptions,
+          category: product.category,
+          subcategory: product.subcategory,
+          sku: product.sku,
+          productType: product.productType,
+          vendorName: product.brand,
+        };
+      });
+      const subtotal = authoritativeItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+      const everyItemHasFreeShipping = currentProducts.length > 0 && currentProducts.every((product) => product.freeShipping);
+      const shipping = calculateDeliveryFee(subtotal, data.fulfillmentType, everyItemHasFreeShipping);
+      const total = calculateOrderTotal(subtotal, shipping);
+      const [o] = await db.insert(orders).values({
+        ...data,
+        items: authoritativeItems,
+        subtotal,
+        shipping,
+        total,
+        userId: user.id,
+        paymentMethod: "wave",
+        paymentStatus: "pending",
+        fulfillmentType: data.fulfillmentType,
+      }).returning();
       const qrs = await ensureOrderQrs(o.id);
 
       // Clear cart after order
@@ -1094,9 +1133,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await addTracking(o.id, "pending", "Order placed", `Order #${o.id.slice(0, 8).toUpperCase()} was created.`, user, { fulfillmentType: data.fulfillmentType });
       await notifyOrderParties({ ...o, qrCode: qrs.delivery.code }, "New Order Placed", `Order #${o.id.slice(0, 8).toUpperCase()} has been placed.`, "order");
 
-      return res.status(201).json({ ...o, qrCode: qrs.delivery.code, qrs });
+      return res.status(201).json({ ...o, qrCode: qrs.delivery.code, qrs, pricing: { subtotal, shipping, total, currency: "GMD" } });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
+      if (err.message === "Product is no longer available" || err.message?.startsWith("Product is out of stock:")) {
+        return res.status(400).json({ message: err.message });
+      }
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -2195,6 +2237,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = (req as any).user;
       const [order] = await db.select().from(orders).where(and(eq(orders.id, param(req, "orderId")), eq(orders.userId, user.id))).limit(1);
       if (!order) return res.status(404).json({ message: "Order not found" });
+      if (order.paymentStatus === "paid" || order.status === "paid") return res.status(409).json({ message: "Order is already paid" });
       await addWalletTransaction({ userId: user.id, type: "escrow_payment", direction: "debit", amount: order.total, orderId: order.id, description: `Escrow payment for order #${order.id.slice(0, 8).toUpperCase()}` });
       const vendorTotals = await calculateVendorTotalsFromDb(order);
       const productAmount = Object.values(vendorTotals).reduce((a, b) => a + b, 0);
@@ -2532,10 +2575,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
       if (!order) return res.status(404).json({ message: "Order not found" });
       if (user.role !== "admin" && order.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
-      const { method, reference } = z.object({ method: z.string().default("wallet"), reference: z.string().optional() }).parse(req.body || {});
-      if (method === "wallet") {
-        await addWalletTransaction({ userId: order.userId!, type: "escrow_payment", direction: "debit", amount: order.total, orderId: order.id, description: `Escrow payment for order #${order.id.slice(0, 8).toUpperCase()}` });
-      }
+      if (order.paymentMethod === "wave") return res.status(409).json({ message: "Wave payments are confirmed only by a signed Wave webhook" });
+      if (order.paymentStatus === "paid" || order.status === "paid") return res.status(409).json({ message: "Order is already paid" });
+      const { method, reference } = z.object({ method: z.literal("wallet").default("wallet"), reference: z.string().optional() }).parse(req.body || {});
+      await addWalletTransaction({ userId: order.userId!, type: "escrow_payment", direction: "debit", amount: order.total, orderId: order.id, description: `Escrow payment for order #${order.id.slice(0, 8).toUpperCase()}` });
       const vendorTotals = await calculateVendorTotalsFromDb(order);
       const productAmount = Object.values(vendorTotals).reduce((a, b) => a + b, 0);
       const commissionAmount = Math.round(productAmount * 0.05);

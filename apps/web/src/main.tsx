@@ -10,6 +10,7 @@ const tokenStore = createTokenStore("mansamart_web_session");
 const api = new MansaMartApi(import.meta.env.VITE_API_URL || "http://127.0.0.1:5000", "web", tokenStore.get);
 
 function App() {
+  const paymentRedirect = window.location.pathname.match(/^\/payment\/wave\/(success|error)$/);
   const [user, setUser] = useState<SessionUser | null>(null);
   const [products, setProducts] = useState<ProductSummary[]>([]);
   const [dashboard, setDashboard] = useState<unknown>(null);
@@ -50,6 +51,7 @@ function App() {
     await api.logout().catch(() => undefined); tokenStore.clear(); setUser(null); setDashboard(null); window.history.replaceState({}, "", "/");
   }
 
+  if (paymentRedirect) return <PaymentRedirect kind={paymentRedirect[1] as "success" | "error"}/>;
   if (busy && tokenStore.get()) return <div className="loading">Loading MansaMart…</div>;
 
   return <div className="site-shell">
@@ -62,6 +64,11 @@ function App() {
     <footer><b>MansaMart</b><span>Made in The Gambia by OceanBrown</span><span>Customer support · Privacy · Terms</span></footer>
     {loginOpen && <div className="modal-backdrop" onMouseDown={() => setLoginOpen(false)}><form className="login-card" onSubmit={login} onMouseDown={(e) => e.stopPropagation()}><button type="button" className="close" onClick={() => setLoginOpen(false)}>×</button><span className="login-mark">M</span><h2>Welcome back</h2><p>Customers, vendors, providers and riders can sign in here.</p>{error && <div className="error">{error}</div>}<label>Email<input name="email" type="email" required autoComplete="email"/></label><label>Password<input name="password" type="password" required autoComplete="current-password"/></label><button className="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button><small>Administrator accounts cannot sign in on this website.</small></form></div>}
   </div>;
+}
+
+function PaymentRedirect({ kind }: { kind: "success" | "error" }) {
+  const success = kind === "success";
+  return <main className="payment-return"><section><span className={success ? "payment-icon success" : "payment-icon error"}>{success ? "✓" : "!"}</span><p className="eyebrow">WAVE CHECKOUT</p><h1>{success ? "Payment submitted" : "Payment was not completed"}</h1><p>{success ? "Return to MansaMart while we verify the signed confirmation from Wave. Your order is not marked paid until that confirmation arrives." : "No payment confirmation was received. Return to MansaMart and try again when you are ready."}</p><a className="primary" href="/">Return to MansaMart</a><small>You can safely close this page if you opened Wave from the mobile app.</small></section></main>;
 }
 
 function Dashboard({ user, data }: { user: SessionUser; data: unknown }) {

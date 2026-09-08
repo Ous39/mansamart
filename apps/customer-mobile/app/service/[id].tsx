@@ -186,7 +186,7 @@ export default function ServiceDetailScreen() {
 
           <View style={styles.divider} />
 
-          <Text style={styles.sectionLabel}>What's included</Text>
+          <Text style={styles.sectionLabel}>What’s included</Text>
           <View style={styles.featuresList}>
             {features.map((f, i) => (
               <View key={i} style={styles.featureItem}>

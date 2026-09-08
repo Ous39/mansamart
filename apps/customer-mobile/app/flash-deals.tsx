@@ -66,7 +66,7 @@ export default function FlashDealsScreen() {
       <View style={styles.banner}>
         <Ionicons name="flash" size={18} color="#E63946" />
         <Text style={styles.bannerText}>
-          Limited time prices — grab them before they're gone!
+          Limited time prices — grab them before they’re gone!
         </Text>
       </View>
 

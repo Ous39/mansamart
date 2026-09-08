@@ -81,6 +81,26 @@ pnpm typecheck
 pnpm build
 ```
 
+## Wave Checkout
+
+The customer app and API include a server-side Wave Checkout integration. It is deliberately disabled by default because production activation requires a Wave Business wallet, Checkout API permission, an API key, separate signing secrets, webhook registration, and written confirmation that the wallet accepts `GMD` checkout sessions.
+
+The payment flow is:
+
+1. The API reloads product prices and calculates the order total; client-submitted prices are ignored.
+2. The API creates a Wave Checkout Session and returns only its safe launch URL.
+3. The mobile app opens the Wave URL in the external browser.
+4. `POST /api/webhooks/wave` verifies Wave's HMAC-SHA256 signature against the untouched request body.
+5. The order becomes paid only after the webhook's session, reference, amount, currency and status match the stored payment attempt.
+
+Configure the server with the empty placeholders documented in `.env.example`. Never expose Wave secrets through `EXPO_PUBLIC_*` or `VITE_*` variables. Register this production webhook in the Wave Business Portal:
+
+```text
+https://api.mansamart.gm/api/webhooks/wave
+```
+
+Set both `WAVE_ENABLED=true` and `WAVE_GMD_CONFIRMED=true` only after Wave confirms GMD support. The admin finance screen lists payment attempts and the API supports full Wave refunds with an audited administrator endpoint.
+
 ## Production security checklist
 
 - Serve every domain over HTTPS.

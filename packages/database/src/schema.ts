@@ -408,6 +408,57 @@ export const transactions = pgTable("transactions", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+export const paymentAttempts = pgTable("payment_attempts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  provider: text("provider").notNull().default("wave"),
+  status: text("status").notNull().default("pending"),
+  amount: integer("amount").notNull(),
+  currency: text("currency").notNull(),
+  clientReference: text("client_reference").notNull().unique(),
+  providerSessionId: text("provider_session_id").unique(),
+  providerTransactionId: text("provider_transaction_id"),
+  launchUrl: text("launch_url"),
+  failureCode: text("failure_code"),
+  failureMessage: text("failure_message"),
+  providerPayload: jsonb("provider_payload").$type<Record<string, unknown>>().default({}),
+  expiresAt: timestamp("expires_at"),
+  paidAt: timestamp("paid_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const paymentWebhookEvents = pgTable("payment_webhook_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  provider: text("provider").notNull().default("wave"),
+  eventId: text("event_id").notNull().unique(),
+  eventType: text("event_type").notNull(),
+  providerSessionId: text("provider_session_id"),
+  status: text("status").notNull().default("received"),
+  failureMessage: text("failure_message"),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  receivedAt: timestamp("received_at").notNull().defaultNow(),
+  processedAt: timestamp("processed_at"),
+});
+
+export const paymentRefunds = pgTable("payment_refunds", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  paymentAttemptId: varchar("payment_attempt_id").notNull().references(() => paymentAttempts.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  requestedBy: varchar("requested_by").references(() => users.id, { onDelete: "set null" }),
+  provider: text("provider").notNull().default("wave"),
+  amount: integer("amount").notNull(),
+  currency: text("currency").notNull(),
+  status: text("status").notNull().default("pending"),
+  reason: text("reason").notNull(),
+  failureCode: text("failure_code"),
+  failureMessage: text("failure_message"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+});
+
 export const commissions = pgTable("commissions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   orderId: varchar("order_id").references(() => orders.id, { onDelete: "set null" }),
@@ -726,6 +777,9 @@ export type Coupon = typeof coupons.$inferSelect;
 export type UserActivity = typeof userActivity.$inferSelect;
 export type Wallet = typeof wallets.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type PaymentAttempt = typeof paymentAttempts.$inferSelect;
+export type PaymentWebhookEvent = typeof paymentWebhookEvents.$inferSelect;
+export type PaymentRefund = typeof paymentRefunds.$inferSelect;
 export type Commission = typeof commissions.$inferSelect;
 export type Payout = typeof payouts.$inferSelect;
 export type DeliveryRider = typeof deliveryRiders.$inferSelect;

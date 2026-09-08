@@ -142,7 +142,7 @@ export default function OnboardingScreen() {
             style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.9 }]}
             onPress={() => router.push("/(auth)/register")}
           >
-            <Text style={styles.primaryBtnText}>Get Started — It's Free</Text>
+            <Text style={styles.primaryBtnText}>Get Started — It’s Free</Text>
             <Ionicons name="arrow-forward" size={18} color="#0EA47A" />
           </Pressable>
 

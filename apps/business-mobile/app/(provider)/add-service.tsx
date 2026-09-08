@@ -121,7 +121,7 @@ export default function AddServiceScreen() {
           </View>
 
           <View>
-            <Text style={styles.label}>Duration (e.g. "2-3 hours")</Text>
+            <Text style={styles.label}>Duration (e.g. “2-3 hours”)</Text>
             <View style={styles.inputWrap}>
               <TextInput
                 style={styles.input}
@@ -148,7 +148,7 @@ export default function AddServiceScreen() {
           </View>
 
           <View>
-            <Text style={styles.label}>What's Included (one per line)</Text>
+            <Text style={styles.label}>What’s Included (one per line)</Text>
             <View style={[styles.inputWrap, { height: 100, alignItems: "flex-start", paddingTop: 12 }]}>
               <TextInput
                 style={[styles.input, { flex: 1 }]}

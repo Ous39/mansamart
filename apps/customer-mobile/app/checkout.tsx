@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -14,93 +14,93 @@ import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as WebBrowser from "expo-web-browser";
+import { calculateDeliveryFee, calculateOrderTotal } from "@mansamart/business-logic";
 import Colors from "@/constants/colors";
 import { useCart } from "@/contexts/CartContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiRequest } from "@/lib/query-client";
 
 const paymentMethods = [
-  { id: "card", label: "Ecobank / GTBank Card", icon: "card-outline" },
   { id: "wave", label: "Wave Mobile Money", icon: "phone-portrait-outline" },
-  { id: "afrimoney", label: "Afrimoney", icon: "wallet-outline" },
-  { id: "orange", label: "Orange Money", icon: "cash-outline" },
 ];
 
 export default function CheckoutScreen() {
   const insets = useSafeAreaInsets();
   const { items, subtotal, clearCart } = useCart();
   const { user } = useAuth();
-  const [paymentMethod, setPaymentMethod] = useState("card");
+  const [paymentMethod, setPaymentMethod] = useState("wave");
   const [fulfillmentType, setFulfillmentType] = useState<"delivery" | "pickup">("delivery");
   const [isLoading, setIsLoading] = useState(false);
+  const [waveReady, setWaveReady] = useState<boolean | null>(null);
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
 
   const [name, setName] = useState(user?.name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const [phone, setPhone] = useState(user?.phone ?? "");
   const [address, setAddress] = useState(user?.address ?? "");
   const [city, setCity] = useState(user?.city ?? "");
-  const [cardNum, setCardNum] = useState("");
-  const [expiry, setExpiry] = useState("");
-  const [cvv, setCvv] = useState("");
-
-  const shipping = fulfillmentType === "pickup" ? 0 : (subtotal >= 500 ? 0 : 3500);
-  const total = subtotal + shipping;
+  const everyItemHasFreeShipping = items.length > 0 && items.every((item) => item.product.freeShipping);
+  const shipping = calculateDeliveryFee(subtotal, fulfillmentType, everyItemHasFreeShipping);
+  const total = calculateOrderTotal(subtotal, shipping);
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
 
+  useEffect(() => {
+    apiRequest("GET", "/api/payments/config")
+      .then((response) => response.json())
+      .then((config) => setWaveReady(config?.wave?.ready === true))
+      .catch(() => setWaveReady(false));
+  }, []);
+
   const handlePlaceOrder = async () => {
-    if (!name || !address || !city) {
+    if (!name || !phone || !address || !city) {
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setIsLoading(true);
     try {
-      await apiRequest("POST", "/api/orders", {
-        items: items.map(i => {
-          const options = i.selectedOptions || { color: i.selectedColor };
-          return {
-            productId: i.product.id,
-            vendorId: i.product.vendorId,
-            name: i.product.name,
-            price: i.product.price,
-            quantity: i.quantity,
-            image: typeof i.product.image === "string" ? i.product.image : Array.isArray(i.product.images) ? i.product.images[0] : undefined,
-            selectedColor: options.color,
-            selectedSize: options.size,
-            selectedVariant: options.variant || i.product.subcategory,
-            selectedOptions: options,
-            category: i.product.category,
-            subcategory: i.product.subcategory,
-            sku: i.product.sku,
-            productType: i.product.productType,
-            vendorName: i.product.brand,
-          };
-        }),
-        subtotal,
-        shipping,
-        total,
-        address,
-        city,
-        phone: phone || user?.phone || "N/A",
-        paymentMethod,
-        fulfillmentType,
-        notes: fulfillmentType === "pickup" ? "Shopper will pickup from vendor" : "Home delivery requested",
+      let orderId = pendingOrderId;
+      if (!orderId) {
+        const orderResponse = await apiRequest("POST", "/api/orders", {
+          items: items.map(i => {
+            const options = i.selectedOptions || { color: i.selectedColor };
+            return {
+              productId: i.product.id,
+              quantity: i.quantity,
+              selectedColor: options.color,
+              selectedSize: options.size,
+              selectedVariant: options.variant || i.product.subcategory,
+              selectedOptions: options,
+            };
+          }),
+          address,
+          city,
+          phone: phone || user?.phone || "N/A",
+          paymentMethod,
+          fulfillmentType,
+          notes: fulfillmentType === "pickup" ? "Shopper will pickup from vendor" : "Home delivery requested",
+        });
+        const order = await orderResponse.json();
+        orderId = order.id;
+        setPendingOrderId(orderId);
+      }
+
+      const payerMobile = /^\+[1-9]\d{7,14}$/.test(phone.trim()) ? phone.trim() : undefined;
+      const checkoutResponse = await apiRequest("POST", "/api/payments/wave/checkout", {
+        orderId,
+        ...(payerMobile ? { payerMobile } : {}),
       });
+      const payment = await checkoutResponse.json();
+      if (!payment.launchUrl) throw new Error("Wave did not return a payment link");
+      await WebBrowser.openBrowserAsync(payment.launchUrl);
       clearCart();
-      router.replace("/order-confirmed");
+      router.replace({ pathname: "/payment-status", params: { paymentId: payment.id, orderId } });
     } catch (err: any) {
       console.error("Place order failed", err);
       alert(err?.message || "Order failed. Please check your connection and try again.");
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-  };
-
-  const formatCardNum = (t: string) => {
-    const digits = t.replace(/\D/g, "").slice(0, 16);
-    return digits.replace(/(.{4})/g, "$1 ").trim();
-  };
-  const formatExpiry = (t: string) => {
-    const d = t.replace(/\D/g, "").slice(0, 4);
-    return d.length >= 3 ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
   };
 
   return (
@@ -154,6 +154,19 @@ export default function CheckoutScreen() {
               </View>
             </View>
             <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Phone Number</Text>
+              <View style={styles.inputWrap}>
+                <TextInput
+                  style={styles.input}
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder="+220 000 000 000"
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="phone-pad"
+                />
+              </View>
+            </View>
+            <View style={styles.fieldGroup}>
               <Text style={styles.label}>Street Address</Text>
               <View style={styles.inputWrap}>
                 <TextInput
@@ -172,7 +185,7 @@ export default function CheckoutScreen() {
                   style={styles.input}
                   value={city}
                   onChangeText={setCity}
-                  placeholder="New York"
+                  placeholder="Banjul"
                   placeholderTextColor={Colors.textMuted}
                 />
               </View>
@@ -238,56 +251,13 @@ export default function CheckoutScreen() {
               </Pressable>
             ))}
           </View>
-
-          {paymentMethod === "card" && (
-            <View style={styles.card}>
-              <View style={styles.fieldGroup}>
-                <Text style={styles.label}>Card Number</Text>
-                <View style={styles.inputWrap}>
-                  <TextInput
-                    style={styles.input}
-                    value={cardNum}
-                    onChangeText={t => setCardNum(formatCardNum(t))}
-                    placeholder="0000 0000 0000 0000"
-                    placeholderTextColor={Colors.textMuted}
-                    keyboardType="numeric"
-                    maxLength={19}
-                  />
-                </View>
-              </View>
-              <View style={styles.row2Col}>
-                <View style={[styles.fieldGroup, { flex: 1 }]}>
-                  <Text style={styles.label}>Expiry</Text>
-                  <View style={styles.inputWrap}>
-                    <TextInput
-                      style={styles.input}
-                      value={expiry}
-                      onChangeText={t => setExpiry(formatExpiry(t))}
-                      placeholder="MM/YY"
-                      placeholderTextColor={Colors.textMuted}
-                      keyboardType="numeric"
-                      maxLength={5}
-                    />
-                  </View>
-                </View>
-                <View style={[styles.fieldGroup, { flex: 1 }]}>
-                  <Text style={styles.label}>CVV</Text>
-                  <View style={styles.inputWrap}>
-                    <TextInput
-                      style={styles.input}
-                      value={cvv}
-                      onChangeText={t => setCvv(t.replace(/\D/g, "").slice(0, 3))}
-                      placeholder="000"
-                      placeholderTextColor={Colors.textMuted}
-                      keyboardType="numeric"
-                      secureTextEntry
-                      maxLength={3}
-                    />
-                  </View>
-                </View>
-              </View>
-            </View>
-          )}
+          <Text style={{ color: waveReady === false ? Colors.error : Colors.textSecondary, fontSize: 13 }}>
+            {waveReady === null
+              ? "Checking Wave availability…"
+              : waveReady
+                ? "You will finish payment securely in the Wave app."
+                : "Wave checkout is awaiting activation for GMD payments."}
+          </Text>
 
           <Text style={styles.sectionTitle}>Order Summary</Text>
           <View style={styles.card}>
@@ -338,17 +308,17 @@ export default function CheckoutScreen() {
             style={({ pressed }) => [
               styles.placeOrderBtn,
               pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
-              isLoading && { opacity: 0.8 },
+              (isLoading || waveReady !== true) && { opacity: 0.6 },
             ]}
             onPress={handlePlaceOrder}
-            disabled={isLoading}
+            disabled={isLoading || waveReady !== true}
           >
             {isLoading ? (
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
-                <Text style={styles.placeOrderText}>Place Order · D {total.toLocaleString()}</Text>
+                <Ionicons name="phone-portrait-outline" size={20} color="#fff" />
+                <Text style={styles.placeOrderText}>{waveReady === null ? "Checking Wave…" : waveReady ? `Pay with Wave · D ${total.toLocaleString()}` : "Wave awaiting activation"}</Text>
               </>
             )}
           </Pressable>

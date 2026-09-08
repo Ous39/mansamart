@@ -58,7 +58,7 @@ export default function ForgotPasswordScreen() {
             </View>
             <Text style={styles.title}>Email Sent!</Text>
             <Text style={styles.subtitle}>
-              We've sent password reset instructions to{"\n"}<Text style={{ fontFamily: "Inter_600SemiBold", color: Colors.text }}>{email}</Text>
+              We’ve sent password reset instructions to{"\n"}<Text style={{ fontFamily: "Inter_600SemiBold", color: Colors.text }}>{email}</Text>
             </Text>
             <Pressable
               style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.9 }]}
@@ -75,7 +75,7 @@ export default function ForgotPasswordScreen() {
               </View>
               <Text style={styles.title}>Reset Password</Text>
               <Text style={styles.subtitle}>
-                Enter your email address and we'll send you a link to reset your password.
+                Enter your email address and we’ll send you a link to reset your password.
               </Text>
             </View>
 

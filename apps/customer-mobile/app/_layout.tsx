@@ -34,6 +34,7 @@ function RootLayoutNav() {
       <Stack.Screen name="service/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="cart" options={{ headerShown: false }} />
       <Stack.Screen name="checkout" options={{ headerShown: false }} />
+      <Stack.Screen name="payment-status" options={{ headerShown: false, gestureEnabled: false }} />
       <Stack.Screen name="order-confirmed" options={{ headerShown: false, gestureEnabled: false }} />
       <Stack.Screen name="order-tracking" options={{ headerShown: false }} />
         <Stack.Screen name="scan-order" options={{ headerShown: false }} />

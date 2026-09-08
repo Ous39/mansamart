@@ -293,7 +293,7 @@ export default function VendorToolsScreen() {
 
               <View style={[styles.infoBanner, { marginTop: 8 }]}>
                 <Ionicons name="information-circle-outline" size={16} color={Colors.primary} />
-                <Text style={styles.infoText}>Featured products appear on the home screen in "For You" and "New Arrivals" sections.</Text>
+                <Text style={styles.infoText}>Featured products appear on the home screen in “For You” and “New Arrivals” sections.</Text>
               </View>
 
               <View style={styles.formBtns}>
