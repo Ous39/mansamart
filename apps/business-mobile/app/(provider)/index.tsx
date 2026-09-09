@@ -7,7 +7,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
 import { safeBack } from "@/lib/navigation";
 import { useAuth } from "@/contexts/AuthContext";
-import { useBookings } from "@/contexts/BookingContext";
+import { useQuery } from "@tanstack/react-query";
 
 function statusColor(s: string) {
   if (s === "pending") return "#F59E0B";
@@ -32,15 +32,11 @@ function StatCard({ label, value, icon, color, bg }: { label: string; value: str
 export default function ProviderDashboard() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { getBookingsForProvider } = useBookings();
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
-
-  const myBookings = getBookingsForProvider(user?.id ?? "provider-001");
-  const pending = myBookings.filter(b => b.status === "pending").length;
-  const confirmed = myBookings.filter(b => b.status === "confirmed").length;
-  const completed = myBookings.filter(b => b.status === "completed").length;
-  const totalRevenue = myBookings.filter(b => b.status === "completed").reduce((s, b) => s + b.price, 0);
-  const recentBookings = [...myBookings].reverse().slice(0, 4);
+  const { data } = useQuery<any>({ queryKey: ["/api/provider/dashboard"] });
+  const stats = data?.stats || {};
+  const recentBookings = data?.recentBookings || [];
+  const verificationStatus = data?.profile?.verificationStatus || "pending";
 
   return (
     <ScrollView
@@ -65,19 +61,30 @@ export default function ProviderDashboard() {
         </View>
         <View style={styles.revenueCard}>
           <Text style={styles.revenueLabel}>Total Earnings</Text>
-          <Text style={styles.revenueValue}>D {(totalRevenue + 8540).toLocaleString()}</Text>
+          <Text style={styles.revenueValue}>D {Number(stats.revenue || 0).toLocaleString()}</Text>
           <View style={styles.revenueRow}>
             <Ionicons name="trending-up" size={14} color="#A78BFA" />
-            <Text style={styles.revenueChange}>{myBookings.length + 48} total bookings</Text>
+            <Text style={styles.revenueChange}>{Number(stats.bookings || 0)} total bookings</Text>
           </View>
         </View>
       </LinearGradient>
 
+      {verificationStatus !== "verified" && (
+        <Pressable style={styles.verificationCard} onPress={() => router.push("/(provider)/settings" as any)}>
+          <Ionicons name="shield-checkmark-outline" size={22} color="#B45309" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.verificationTitle}>Verification required</Text>
+            <Text style={styles.verificationText}>Complete your profile and documents before publishing services or requesting a payout.</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#B45309" />
+        </Pressable>
+      )}
+
       <View style={styles.statsGrid}>
-        <StatCard label="Pending" value={String(pending + 3)} icon="time-outline" color="#F59E0B" bg="#FFFBEB" />
-        <StatCard label="Confirmed" value={String(confirmed + 5)} icon="calendar-outline" color="#2563EB" bg="#EFF6FF" />
-        <StatCard label="Completed" value={String(completed + 40)} icon="checkmark-circle-outline" color={Colors.success} bg="#D1FAE5" />
-        <StatCard label="Rating" value="4.8" icon="star-outline" color="#F59E0B" bg="#FFFBEB" />
+        <StatCard label="Pending" value={String(stats.pendingBookings || 0)} icon="time-outline" color="#F59E0B" bg="#FFFBEB" />
+        <StatCard label="Confirmed" value={String(stats.confirmedBookings || 0)} icon="calendar-outline" color="#2563EB" bg="#EFF6FF" />
+        <StatCard label="Completed" value={String(stats.completedBookings || 0)} icon="checkmark-circle-outline" color={Colors.success} bg="#D1FAE5" />
+        <StatCard label="Rating" value={Number(stats.rating || 0).toFixed(1)} icon="star-outline" color="#F59E0B" bg="#FFFBEB" />
       </View>
 
       <View style={styles.quickActions}>
@@ -85,6 +92,8 @@ export default function ProviderDashboard() {
           { label: "My Services", icon: "construct-outline", route: "/(provider)/services", color: "#7B4FA3" },
           { label: "Bookings", icon: "calendar-outline", route: "/(provider)/bookings", color: "#2563EB" },
           { label: "Add Service", icon: "add-circle-outline", route: "/(provider)/add-service", color: Colors.accent },
+          { label: "Finance & Payouts", icon: "wallet-outline", route: "/wallet", color: Colors.success },
+          { label: "Support", icon: "help-buoy-outline", route: "/business-support", color: "#0F766E" },
         ].map(a => (
           <Pressable
             key={a.label}
@@ -107,7 +116,7 @@ export default function ProviderDashboard() {
             <Text style={styles.seeAll}>View all</Text>
           </Pressable>
         </View>
-        {recentBookings.map(b => (
+        {recentBookings.map((b: any) => (
           <View key={b.id} style={styles.bookingRow}>
             <View style={[styles.bookingIcon, { backgroundColor: "#7B4FA310" }]}>
               <Ionicons name="calendar-outline" size={18} color="#7B4FA3" />
@@ -152,6 +161,9 @@ const styles = StyleSheet.create({
   revenueValue: { fontSize: 36, fontFamily: "Inter_700Bold", color: "#fff" },
   revenueRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   revenueChange: { fontSize: 13, fontFamily: "Inter_500Medium", color: "#A78BFA" },
+  verificationCard: { marginHorizontal: 20, marginTop: 16, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#FFFBEB", borderWidth: 1, borderColor: "#FDE68A" },
+  verificationTitle: { fontFamily: "Inter_700Bold", color: "#92400E", fontSize: 13 },
+  verificationText: { fontFamily: "Inter_400Regular", color: "#A16207", fontSize: 11, lineHeight: 16, marginTop: 2 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, padding: 20, marginTop: -16 },
   statCard: {
     flex: 1, minWidth: "44%", borderRadius: 16, padding: 16, gap: 6,

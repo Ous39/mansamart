@@ -27,8 +27,6 @@ interface NotificationContextValue {
 }
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
-const STORAGE_KEY = "mansamart_notifs";
-
 const WELCOME_NOTIFICATION: AppNotification = {
   id: "welcome-mansamart",
   type: "system",
@@ -57,14 +55,16 @@ function normalizeNotification(row: any): AppNotification {
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const { user, isAuthenticated } = useAuth();
   const [notifications, setNotifications] = useState<AppNotification[]>([WELCOME_NOTIFICATION]);
+  const storageKey = user?.id ? `mansamart_business_notifications:${user.id}` : null;
 
   useEffect(() => {
     let mounted = true;
     let socket: Socket | null = null;
 
     async function loadLocalFallback() {
+      if (!storageKey) return;
       try {
-        const stored = await AsyncStorage.getItem(STORAGE_KEY);
+        const stored = await AsyncStorage.getItem(storageKey);
         if (stored && mounted) setNotifications(JSON.parse(stored));
       } catch {}
     }
@@ -76,7 +76,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         if (mounted) {
           const normalized = (Array.isArray(rows) ? rows : []).map(normalizeNotification);
           setNotifications(normalized.length ? normalized : [WELCOME_NOTIFICATION]);
-          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+          await AsyncStorage.setItem(storageKey!, JSON.stringify(normalized));
         }
       } catch {
         await loadLocalFallback();
@@ -91,22 +91,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         const incoming = normalizeNotification(payload?.notification || payload);
         setNotifications(prev => {
           const next = [incoming, ...prev.filter(n => n.id !== incoming.id)];
-          AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+          if (storageKey) AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => {});
           return next;
         });
       });
     } else {
-      loadLocalFallback();
+      setNotifications([WELCOME_NOTIFICATION]);
     }
 
     return () => {
       mounted = false;
       socket?.disconnect();
     };
-  }, [isAuthenticated, user?.id]);
+  }, [isAuthenticated, user?.id, storageKey]);
 
   const persist = async (ns: AppNotification[]) => {
-    try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(ns)); } catch {}
+    if (!storageKey) return;
+    try { await AsyncStorage.setItem(storageKey, JSON.stringify(ns)); } catch {}
   };
 
   const markRead = (id: string) => {

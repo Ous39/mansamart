@@ -159,6 +159,19 @@ export const orders = pgTable("orders", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const orderVendorFulfillments = pgTable("order_vendor_fulfillments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  subtotal: integer("subtotal").notNull(),
+  status: text("status").notNull().default("pending"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_order_vendor_fulfillments_order_vendor").on(table.orderId, table.vendorId),
+]);
+
 export const bookings = pgTable("bookings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
@@ -319,6 +332,7 @@ export const vendorProfiles = pgTable("vendor_profiles", {
   instagram: text("instagram"),
   businessRegistrationNo: text("business_registration_no"),
   taxNumber: text("tax_number"),
+  payoutMethod: text("payout_method"),
   bankName: text("bank_name"),
   accountName: text("account_name"),
   accountNumber: text("account_number"),
@@ -349,6 +363,12 @@ export const providerProfiles = pgTable("provider_profiles", {
   documents: jsonb("documents").$type<{ type: string; url: string; name: string }[]>().default([]),
   responseTime: text("response_time").default("< 1 hour"),
   whatsapp: text("whatsapp"),
+  payoutMethod: text("payout_method"),
+  bankName: text("bank_name"),
+  accountName: text("account_name"),
+  accountNumber: text("account_number"),
+  mobileMoneyProvider: text("mobile_money_provider"),
+  mobileMoneyNumber: text("mobile_money_number"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -787,6 +807,7 @@ export type InsertUser = typeof users.$inferInsert;
 export type Product = typeof products.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type Order = typeof orders.$inferSelect;
+export type OrderVendorFulfillment = typeof orderVendorFulfillments.$inferSelect;
 export type Booking = typeof bookings.$inferSelect;
 export type Review = typeof reviews.$inferSelect;
 export type CartItem = typeof cartItems.$inferSelect;

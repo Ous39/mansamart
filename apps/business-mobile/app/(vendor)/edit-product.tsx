@@ -8,8 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { apiRequest } from "@/lib/query-client";
 import { pickAndUploadImage } from "@/lib/upload-image";
-import { toImageSource } from "@/lib/product-media";
-import { resolveAssetUrl } from "@/lib/product-media";
+import { resolveAssetUrl, toImageSource } from "@/lib/product-media";
 import { getAllowedCategoryIds, getShopCategoryConfig, SHOP_CATEGORY_CONFIGS } from "@/data/vendor-categories";
 
 function splitList(value: string) { return value.split(",").map(v => v.trim()).filter(Boolean); }
@@ -101,12 +100,12 @@ export default function EditProductScreen() {
     setIsNew(!!product.isNew);
     setIsFeatured(!!product.isFeatured);
     setFreeShipping(!!product.freeShipping);
-  }, [product?.id, profile?.storeName, profile?.location, profile?.shopCategory, allowedConfigs.length]);
+  }, [product, profile?.storeName, profile?.location, profile?.shopCategory, allowedConfigs]);
 
   useEffect(() => {
     const firstSub = activeConfig.subcategories[0] || "General";
     if (!subcategory || !activeConfig.subcategories.includes(subcategory)) setSubcategory(product?.subcategory || firstSub);
-  }, [activeConfig.id]);
+  }, [activeConfig, product?.subcategory, subcategory]);
 
   const dynamicValueMap: Record<string, [string, (v: string) => void]> = {
     material: [material, setMaterial], dimensions: [dimensions, setDimensions], weight: [weight, setWeight], colors: [colors, setColors], features: [features, setFeatures], tags: [tags, setTags], warranty: [warranty, setWarranty], size: [size, setSize], modelNumber: [modelNumber, setModelNumber], condition: [condition, setCondition], productType: [productType, setProductType], sku: [sku, setSku], location: [location, setLocation],

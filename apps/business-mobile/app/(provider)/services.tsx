@@ -1,18 +1,49 @@
 import React from "react";
-import { View, Text, StyleSheet, Pressable, ScrollView, Platform } from "react-native";
+import { View, Text, StyleSheet, Pressable, ScrollView, Platform, Alert, ActivityIndicator } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { serviceCategories } from "@/data/services";
+import { apiRequest } from "@/lib/query-client";
 
 export default function ProviderServicesScreen() {
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
+  const [busyId, setBusyId] = React.useState<string | null>(null);
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
 
   const { data: myServices = [] } = useQuery<any[]>({ queryKey: ["/api/services/provider/mine"] });
+
+  const updateAvailability = async (service: any) => {
+    try {
+      setBusyId(service.id);
+      await apiRequest("PUT", `/api/services/${service.id}`, { isAvailable: !service.isAvailable });
+      await queryClient.invalidateQueries({ queryKey: ["/api/services/provider/mine"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/provider/dashboard"] });
+    } catch (error: any) {
+      Alert.alert("Update failed", error?.message || "Could not update the service.");
+    } finally { setBusyId(null); }
+  };
+
+  const deleteService = (service: any) => Alert.alert(
+    "Delete service?",
+    "This is allowed only when the service has no active bookings.",
+    [
+      { text: "Keep", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: async () => {
+        try {
+          setBusyId(service.id);
+          await apiRequest("DELETE", `/api/services/${service.id}`);
+          await queryClient.invalidateQueries({ queryKey: ["/api/services/provider/mine"] });
+          await queryClient.invalidateQueries({ queryKey: ["/api/provider/dashboard"] });
+        } catch (error: any) {
+          Alert.alert("Cannot delete service", error?.message || "Pause it instead and complete active bookings.");
+        } finally { setBusyId(null); }
+      } },
+    ],
+  );
 
   return (
     <View style={styles.container}>
@@ -78,9 +109,19 @@ export default function ProviderServicesScreen() {
                       {s.isAvailable ? "Active" : "Paused"}
                     </Text>
                   </View>
-                  <Pressable style={styles.editBtn} onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}>
-                    <Ionicons name="pencil-outline" size={14} color="#7B4FA3" />
-                    <Text style={[styles.editBtnText, { color: "#7B4FA3" }]}>Edit</Text>
+                </View>
+                <View style={styles.manageRow}>
+                  <Pressable style={styles.manageBtn} disabled={busyId === s.id} onPress={() => updateAvailability(s)}>
+                    {busyId === s.id ? <ActivityIndicator size="small" color={Colors.primary} /> : <Ionicons name={s.isAvailable ? "pause-circle-outline" : "play-circle-outline"} size={15} color={Colors.primary} />}
+                    <Text style={styles.manageText}>{s.isAvailable ? "Pause" : "Activate"}</Text>
+                  </Pressable>
+                  <Pressable style={styles.manageBtn} onPress={() => router.push({ pathname: "/(provider)/add-service", params: { id: s.id } })}>
+                    <Ionicons name="pencil-outline" size={15} color="#7B4FA3" />
+                    <Text style={[styles.manageText, { color: "#7B4FA3" }]}>Edit</Text>
+                  </Pressable>
+                  <Pressable style={styles.manageBtn} disabled={busyId === s.id} onPress={() => deleteService(s)}>
+                    <Ionicons name="trash-outline" size={15} color={Colors.error} />
+                    <Text style={[styles.manageText, { color: Colors.error }]}>Delete</Text>
                   </Pressable>
                 </View>
               </View>
@@ -128,9 +169,7 @@ const styles = StyleSheet.create({
   statusBadge: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
-  editBtn: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    backgroundColor: "#F3E8FF", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5,
-  },
-  editBtnText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  manageRow: { flexDirection: "row", gap: 8, marginTop: 4 },
+  manageBtn: { flex: 1, minHeight: 34, borderRadius: 8, backgroundColor: Colors.borderLight, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 },
+  manageText: { fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.primary },
 });

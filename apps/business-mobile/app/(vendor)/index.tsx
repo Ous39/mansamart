@@ -15,33 +15,23 @@ import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { safeBack } from "@/lib/navigation";
 import { useAuth } from "@/contexts/AuthContext";
-import { BarChart } from "@/components/BarChart";
 
 interface ApiOrder {
   id: string; items: any[]; total: number; status: string; city: string;
-  paymentMethod: string; createdAt: string;
+  paymentMethod: string; createdAt: string; vendorStatus?: string;
 }
 interface ApiProduct {
   id: string; name: string; price: number; rating: number; inStock: boolean;
   soldCount?: number; category: string; stock?: number;
 }
 interface VendorDashboardApi {
-  stats: { products: number; activeProducts: number; lowStock: number; orders: number; pendingOrders: number; revenue: number; avgRating: number };
+  profile?: { verificationStatus?: string };
+  stats: { products: number; activeProducts: number; lowStock: number; orders: number; pendingOrders: number; preparingOrders?: number; revenue: number; avgRating: number };
   lowStock: ApiProduct[];
   recentOrders: ApiOrder[];
   recentProducts: ApiProduct[];
   categoryStats: { category: string; products: number; sold: number }[];
 }
-
-const WEEKLY_REVENUE = [
-  { label: "Mon", value: 320 },
-  { label: "Tue", value: 580 },
-  { label: "Wed", value: 410 },
-  { label: "Thu", value: 740 },
-  { label: "Fri", value: 890 },
-  { label: "Sat", value: 1120 },
-  { label: "Sun", value: 640 },
-];
 
 function StatCard({ label, value, icon, color, bg }: { label: string; value: string; icon: string; color: string; bg: string }) {
   return (
@@ -98,7 +88,7 @@ export default function VendorDashboard() {
           </View>
         </View>
         <View style={styles.revenueCard}>
-          <Text style={styles.revenueLabel}>Total Revenue</Text>
+          <Text style={styles.revenueLabel}>Paid Product Revenue</Text>
           <Text style={styles.revenueValue}>D {totalRevenue.toLocaleString()}</Text>
           <View style={styles.revenueRow}>
             <Ionicons name="trending-up" size={14} color={Colors.success} />
@@ -107,33 +97,19 @@ export default function VendorDashboard() {
         </View>
       </LinearGradient>
 
+      {dashboard?.profile?.verificationStatus !== "verified" && (
+        <Pressable style={styles.verificationCard} onPress={() => router.push("/(vendor)/settings" as any)}>
+          <Ionicons name="shield-checkmark-outline" size={22} color="#B45309" />
+          <View style={{ flex: 1 }}><Text style={styles.verificationTitle}>Verification required</Text><Text style={styles.verificationText}>Complete your store profile and documents before publishing or requesting payouts.</Text></View>
+          <Ionicons name="chevron-forward" size={18} color="#B45309" />
+        </Pressable>
+      )}
+
       <View style={styles.statsGrid}>
         <StatCard label="Total Orders" value={String(dashboard?.stats?.orders ?? myOrders.length)} icon="bag-outline" color="#2563EB" bg="#EFF6FF" />
         <StatCard label="Pending" value={String(pendingOrders)} icon="time-outline" color="#F59E0B" bg="#FFFBEB" />
         <StatCard label="Products" value={String(dashboard?.stats?.products ?? myProducts.length)} icon="cube-outline" color={Colors.primary} bg={Colors.primaryLight} />
         <StatCard label="Avg Rating" value={String(avgRating)} icon="star-outline" color="#F59E0B" bg="#FFFBEB" />
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Revenue This Week</Text>
-        <View style={styles.chartCard}>
-          <View style={styles.chartHeader}>
-            <View>
-              <Text style={styles.chartTotal}>D {(WEEKLY_REVENUE.reduce((a, b) => a + b.value, 0) * 75).toLocaleString()}</Text>
-              <Text style={styles.chartSubtitle}>Total this week</Text>
-            </View>
-            <View style={styles.chartBadge}>
-              <Ionicons name="trending-up" size={13} color={Colors.success} />
-              <Text style={styles.chartBadgeText}>+18.4%</Text>
-            </View>
-          </View>
-          <BarChart
-            data={WEEKLY_REVENUE}
-            height={100}
-            barColor={Colors.primary}
-            formatValue={v => `D${v * 75}`}
-          />
-        </View>
       </View>
 
       <View style={styles.section}>
@@ -178,6 +154,9 @@ export default function VendorDashboard() {
           { label: "Orders", icon: "receipt-outline", route: "/(vendor)/orders", color: "#2563EB" },
           { label: "Add Product", icon: "add-circle-outline", route: "/(vendor)/add-product", color: Colors.accent },
           { label: "Vendor Tools", icon: "megaphone-outline", route: "/(vendor)/tools", color: "#7B4FA3" },
+          { label: "Finance & Payouts", icon: "wallet-outline", route: "/wallet", color: Colors.success },
+          { label: "Returns & Refunds", icon: "return-down-back-outline", route: "/business-returns", color: "#B45309" },
+          { label: "Business Support", icon: "help-buoy-outline", route: "/business-support", color: "#0F766E" },
         ].map(a => (
           <Pressable
             key={a.label}
@@ -206,6 +185,7 @@ export default function VendorDashboard() {
           </View>
         ) : recentOrders.map(order => {
           const firstItem = Array.isArray(order.items) ? order.items[0] : null;
+          const displayStatus = order.vendorStatus || order.status;
           return (
             <View key={order.id} style={styles.orderRow}>
               <View style={styles.orderLeft}>
@@ -217,9 +197,9 @@ export default function VendorDashboard() {
               </View>
               <View style={styles.orderRight}>
                 <Text style={styles.orderAmount}>D {order.total.toLocaleString()}</Text>
-                <View style={[styles.statusBadge, { backgroundColor: statusColor(order.status) + "20" }]}>
-                  <Text style={[styles.statusText, { color: statusColor(order.status) }]}>
-                    {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+                <View style={[styles.statusBadge, { backgroundColor: statusColor(displayStatus) + "20" }]}>
+                  <Text style={[styles.statusText, { color: statusColor(displayStatus) }]}>
+                    {displayStatus.replace(/_/g, " ")}
                   </Text>
                 </View>
               </View>
@@ -243,6 +223,9 @@ const styles = StyleSheet.create({
   revenueValue: { fontSize: 36, fontFamily: "Inter_700Bold", color: "#fff" },
   revenueRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   revenueChange: { fontSize: 13, fontFamily: "Inter_500Medium", color: "#6EE7B7" },
+  verificationCard: { marginHorizontal: 20, marginTop: 16, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#FFFBEB", borderWidth: 1, borderColor: "#FDE68A" },
+  verificationTitle: { fontFamily: "Inter_700Bold", color: "#92400E", fontSize: 13 },
+  verificationText: { fontFamily: "Inter_400Regular", color: "#A16207", fontSize: 11, lineHeight: 16, marginTop: 2 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, padding: 20, marginTop: -16 },
   statCard: { flex: 1, minWidth: "44%", borderRadius: 16, padding: 16, gap: 6, backgroundColor: Colors.surface, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2 },
   statIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 4 },

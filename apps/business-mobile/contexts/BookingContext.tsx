@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useMemo, ReactNode, useEffe
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiRequest, getApiUrl } from "@/lib/query-client";
 import { getToken } from "@/lib/auth-token";
+import { useAuth } from "@/contexts/AuthContext";
 
 export interface Booking {
   id: string;
@@ -38,26 +39,24 @@ async function authedGet(path: string) {
   const token = getToken();
   const url = new URL(path, getApiUrl());
   const res = await fetch(url.toString(), {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      "X-MansaMart-App": process.env.EXPO_PUBLIC_APP_AUDIENCE || "business",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
   return res;
 }
 
 export function BookingProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const storageKey = user?.id ? `mansamart_business_bookings:${user.id}` : null;
 
-  useEffect(() => {
-    loadBookings();
-  }, []);
-
-  const loadBookings = async () => {
+  const loadBookings = useCallback(async () => {
     const token = getToken();
-    if (!token) {
-      try {
-        const stored = await AsyncStorage.getItem("oceanbrown_bookings");
-        if (stored) setBookings(JSON.parse(stored));
-      } catch {}
+    if (!token || !storageKey) {
+      setBookings([]);
       return;
     }
 
@@ -65,16 +64,22 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     try {
       const res = await authedGet("/api/bookings");
       if (res.ok) {
-        setBookings(await res.json());
+        const next = await res.json();
+        setBookings(next);
+        await AsyncStorage.setItem(storageKey, JSON.stringify(next));
       }
     } catch {
       try {
-        const stored = await AsyncStorage.getItem("oceanbrown_bookings");
+        const stored = await AsyncStorage.getItem(storageKey);
         if (stored) setBookings(JSON.parse(stored));
       } catch {}
     }
     setIsLoading(false);
-  };
+  }, [storageKey]);
+
+  useEffect(() => {
+    loadBookings();
+  }, [loadBookings]);
 
   const addBooking = async (booking: Omit<Booking, "id" | "createdAt">): Promise<Booking> => {
     const token = getToken();
@@ -85,15 +90,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       return newBooking;
     }
 
-    const newBooking: Booking = {
-      ...booking,
-      id: "b" + Date.now().toString().slice(-8),
-      createdAt: new Date().toISOString().split("T")[0],
-    };
-    const updated = [newBooking, ...bookings];
-    setBookings(updated);
-    await AsyncStorage.setItem("oceanbrown_bookings", JSON.stringify(updated));
-    return newBooking;
+    throw new Error("Bookings require a signed-in customer account.");
   };
 
   const updateBookingStatus = async (bookingId: string, status: Booking["status"]) => {
@@ -101,16 +98,18 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     if (token) {
       await apiRequest("PUT", `/api/bookings/${bookingId}/status`, { status });
     }
-    setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status } : b));
+    setBookings(prev => {
+      const next = prev.map(b => b.id === bookingId ? { ...b, status } : b);
+      if (storageKey) AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
   };
 
   const cancelBooking = async (bookingId: string) => {
     await updateBookingStatus(bookingId, "cancelled");
   };
 
-  const refresh = useCallback(async () => {
-    await loadBookings();
-  }, []);
+  const refresh = useCallback(async () => { await loadBookings(); }, [loadBookings]);
 
   const getBookingsForUser = (userId: string) => bookings.filter(b => b.userId === userId);
   const getBookingsForProvider = (providerId: string) => bookings.filter(b => b.providerId === providerId);
@@ -120,7 +119,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     bookings, isLoading,
     addBooking, updateBookingStatus, cancelBooking,
     getBookingsForUser, getBookingsForProvider, getAllBookings, refresh,
-  }), [bookings, isLoading]);
+  }), [bookings, isLoading, refresh, storageKey]);
 
   return <BookingContext.Provider value={value}>{children}</BookingContext.Provider>;
 }

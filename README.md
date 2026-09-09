@@ -70,6 +70,16 @@ Choose option 1 to run the app on a physical phone or option 2 to open it in a b
 
 Use option 3 when you want to stop the local PostgreSQL and API containers. Their database volume is preserved. Wave remains disabled by the provided development environment.
 
+### Windows one-click Business app launcher
+
+After installing Node.js 20+, Docker Desktop, and Expo Go, start Docker Desktop and double-click:
+
+```text
+run-business.bat
+```
+
+Choose option 1 for a physical Android or iPhone on the same Wi-Fi, or option 2 for a browser preview. The launcher installs locked dependencies, starts PostgreSQL and the API, applies the current schema, loads development seed accounts, waits for the health check, and runs the Business app on port 8082.
+
 ## Docker
 
 ```bash

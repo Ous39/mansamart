@@ -9,18 +9,11 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
-import { getApiUrl } from "@/lib/query-client";
-import { getToken } from "@/lib/auth-token";
+import { apiRequest } from "@/lib/query-client";
 
 async function apiCall(path: string, method: string, body?: any) {
-  const token = getToken();
-  const r = await fetch(new URL(path, getApiUrl()).toString(), {
-    method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || "Failed"); }
-  return r.json();
+  const response = await apiRequest(method, path, body);
+  return response.json();
 }
 
 function SectionHeader({ icon, title, subtitle }: { icon: string; title: string; subtitle: string }) {
@@ -52,7 +45,7 @@ export default function VendorToolsScreen() {
   const [promoDays, setPromoDays] = useState("7");
   const [showPromoForm, setShowPromoForm] = useState(false);
 
-  const { data: myProducts = [], isLoading: loadingProducts } = useQuery<any[]>({
+  const { data: myProducts = [] } = useQuery<any[]>({
     queryKey: ["/api/products/vendor/mine"],
   });
 
@@ -89,15 +82,11 @@ export default function VendorToolsScreen() {
     mutationFn: () => apiCall(`/api/vendor/promote/${promoProduct.id}`, "POST", { days: parseInt(promoDays) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/products/vendor/mine"] });
-      Alert.alert("✅ Product Promoted!", `${promoProduct.name} is now featured for ${promoDays} days.`);
+      Alert.alert("Product Featured", `${promoProduct.name} is now shown as a featured product.`);
       setShowPromoForm(false); setPromoProduct(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
-    onError: () => {
-      qc.invalidateQueries({ queryKey: ["/api/products/vendor/mine"] });
-      Alert.alert("✅ Product Featured!", `${promoProduct.name} has been marked as featured.`);
-      setShowPromoForm(false); setPromoProduct(null);
-    },
+    onError: (error: any) => Alert.alert("Promotion failed", error?.message || "The product could not be featured."),
   });
 
   return (

@@ -12,7 +12,7 @@ export default function RoleLayout() {
     if (isLoading) return;
     if (!user) { router.replace("/(auth)/login"); return; }
     if (role !== "vendor") router.replace(getDefaultRouteForRole(role) as any);
-  }, [isLoading, user?.id, role]);
+  }, [isLoading, user, role]);
 
   if (isLoading || !user || role !== "vendor") return null;
 

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, Pressable, FlatList, Platform } from "react-native";
+import { View, Text, StyleSheet, Pressable, FlatList, Platform, Alert, ActivityIndicator, RefreshControl } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -25,16 +25,22 @@ function statusStyle(s: string) {
 export default function ProviderBookingsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { getBookingsForProvider, updateBookingStatus } = useBookings();
+  const { getBookingsForProvider, updateBookingStatus, refresh, isLoading } = useBookings();
   const [filter, setFilter] = useState("All");
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
 
-  const all = getBookingsForProvider(user?.id ?? "provider-001");
+  const all = user?.id ? getBookingsForProvider(user.id) : [];
   const filtered = filter === "All" ? all : all.filter(b => b.status.toLowerCase() === filter.toLowerCase());
 
-  const handleStatus = (id: string, status: Booking["status"]) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    updateBookingStatus(id, status);
+  const handleStatus = async (id: string, status: Booking["status"]) => {
+    try {
+      setUpdatingId(id);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      await updateBookingStatus(id, status);
+    } catch (error: any) {
+      Alert.alert("Booking not updated", error?.message || "Please try again.");
+    } finally { setUpdatingId(null); }
   };
 
   return (
@@ -69,6 +75,7 @@ export default function ProviderBookingsScreen() {
         keyExtractor={i => i.id}
         contentContainerStyle={{ padding: 20, gap: 12, paddingBottom: 40 + (Platform.OS === "web" ? 34 : 0) }}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={isLoading} onRefresh={refresh} />}
         renderItem={({ item }) => {
           const ss = statusStyle(item.status);
           return (
@@ -103,8 +110,8 @@ export default function ProviderBookingsScreen() {
               </View>
               {item.status === "pending" && (
                 <View style={styles.actionRow}>
-                  <Pressable style={styles.confirmBtn} onPress={() => handleStatus(item.id, "confirmed")}>
-                    <Ionicons name="checkmark" size={14} color="#fff" />
+                  <Pressable style={styles.confirmBtn} disabled={updatingId === item.id} onPress={() => handleStatus(item.id, "confirmed")}>
+                    {updatingId === item.id ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="checkmark" size={14} color="#fff" />}
                     <Text style={styles.confirmBtnText}>Confirm</Text>
                   </Pressable>
                   <Pressable style={styles.cancelBtn} onPress={() => handleStatus(item.id, "cancelled")}>

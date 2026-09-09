@@ -6,8 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
-import { getApiUrl } from "@/lib/query-client";
-import { getToken } from "@/lib/auth-token";
+import { apiRequest } from "@/lib/query-client";
 import { pickAndUploadImage } from "@/lib/upload-image";
 import { toImageSource } from "@/lib/product-media";
 import { SHOP_CATEGORY_CONFIGS, getShopCategoryConfig } from "@/data/vendor-categories";
@@ -16,14 +15,8 @@ function splitList(value: string) { return value.split(",").map(v => v.trim()).f
 function joinList(value: any) { return Array.isArray(value) ? value.join(", ") : ""; }
 
 async function apiCall(path: string, method: string, body?: any) {
-  const token = getToken();
-  const r = await fetch(new URL(path, getApiUrl()).toString(), {
-    method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || "Failed"); }
-  return r.json();
+  const response = await apiRequest(method, path, body);
+  return response.json();
 }
 
 export default function VendorSettingsScreen() {
@@ -54,6 +47,7 @@ export default function VendorSettingsScreen() {
   const [coverImage, setCoverImage] = useState("");
   const [businessRegistrationNo, setBusinessRegistrationNo] = useState("");
   const [taxNumber, setTaxNumber] = useState("");
+  const [payoutMethod, setPayoutMethod] = useState<"mobile_money" | "bank_transfer">("mobile_money");
   const [bankName, setBankName] = useState("");
   const [accountName, setAccountName] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
@@ -86,6 +80,7 @@ export default function VendorSettingsScreen() {
       setCoverImage(profile.coverImage || "");
       setBusinessRegistrationNo(profile.businessRegistrationNo || "");
       setTaxNumber(profile.taxNumber || "");
+      setPayoutMethod(profile.payoutMethod || "mobile_money");
       setBankName(profile.bankName || "");
       setAccountName(profile.accountName || "");
       setAccountNumber(profile.accountNumber || "");
@@ -109,7 +104,7 @@ export default function VendorSettingsScreen() {
     logo, coverImage, location, operatingHours, deliveryZones: splitList(deliveryZones), supportPhone, supportEmail,
     minOrderAmount: Math.max(0, Math.round(Number(minOrderAmount || 0))),
     returnPolicy, shippingPolicy, whatsapp, facebook, instagram,
-    businessRegistrationNo, taxNumber, bankName, accountName, accountNumber, mobileMoneyProvider, mobileMoneyNumber, internalNotes,
+    businessRegistrationNo, taxNumber, payoutMethod, bankName, accountName, accountNumber, mobileMoneyProvider, mobileMoneyNumber, internalNotes,
   });
 
   const toggleAllowed = (id: string) => {
@@ -279,6 +274,11 @@ export default function VendorSettingsScreen() {
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Payment Tracking</Text>
+            <Text style={styles.helpText}>Choose the default destination for payout requests. Actual transfers require MansaMart review.</Text>
+            <View style={styles.docTypes}>
+              <Pressable style={[styles.docType, payoutMethod === "mobile_money" && styles.docTypeActive]} onPress={() => setPayoutMethod("mobile_money")}><Text style={[styles.docTypeText, payoutMethod === "mobile_money" && styles.docTypeTextActive]}>Mobile Money</Text></Pressable>
+              <Pressable style={[styles.docType, payoutMethod === "bank_transfer" && styles.docTypeActive]} onPress={() => setPayoutMethod("bank_transfer")}><Text style={[styles.docTypeText, payoutMethod === "bank_transfer" && styles.docTypeTextActive]}>Bank Transfer</Text></Pressable>
+            </View>
             <Field label="Bank Name" value={bankName} onChange={setBankName} placeholder="Bank name" />
             <Field label="Account Name" value={accountName} onChange={setAccountName} placeholder="Account name" />
             <Field label="Account Number" value={accountNumber} onChange={setAccountNumber} placeholder="Account number" keyboardType="number-pad" />
@@ -332,6 +332,9 @@ export default function VendorSettingsScreen() {
             <QuickLink icon="receipt-outline" label="Incoming Orders" onPress={() => router.push("/(vendor)/orders")} />
             <QuickLink icon="add-circle-outline" label="Add Product Using Shop Form" onPress={() => router.push("/(vendor)/add-product")} />
             <QuickLink icon="bar-chart-outline" label="Dashboard" onPress={() => router.push("/(vendor)/" as any)} />
+            <QuickLink icon="wallet-outline" label="Finance & Payouts" onPress={() => router.push("/wallet")} />
+            <QuickLink icon="return-down-back-outline" label="Returns & Refunds" onPress={() => router.push("/business-returns" as any)} />
+            <QuickLink icon="help-buoy-outline" label="Business Support" onPress={() => router.push("/business-support" as any)} />
           </View>
 
           <Pressable style={styles.logoutBtn} onPress={() => { logout(); router.replace("/(auth)/login"); }}>

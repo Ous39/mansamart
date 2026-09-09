@@ -1,7 +1,6 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import {
-  View, Text, StyleSheet, TouchableOpacity, Pressable,
-  Alert, Platform
+  View, Text, StyleSheet, TouchableOpacity
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";

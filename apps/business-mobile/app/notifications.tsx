@@ -8,18 +8,12 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
-import { getApiUrl } from "@/lib/query-client";
-import { getToken } from "@/lib/auth-token";
+import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/contexts/AuthContext";
 
 async function apiCall(path: string, method = "PUT") {
-  const token = getToken();
-  const r = await fetch(new URL(path, getApiUrl()).toString(), {
-    method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-  });
-  if (!r.ok) throw new Error("Failed");
-  return r.json();
+  const response = await apiRequest(method, path);
+  return response.json();
 }
 
 function timeAgo(d: string) {

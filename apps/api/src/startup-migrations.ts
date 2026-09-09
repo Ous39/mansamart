@@ -155,6 +155,7 @@ export async function runStartupMigrations() {
     ALTER TABLE vendor_profiles ADD COLUMN IF NOT EXISTS whatsapp text;
     ALTER TABLE vendor_profiles ADD COLUMN IF NOT EXISTS mobile_money_number text;
     ALTER TABLE vendor_profiles ADD COLUMN IF NOT EXISTS account_number text;
+    ALTER TABLE vendor_profiles ADD COLUMN IF NOT EXISTS payout_method text;
     ALTER TABLE vendor_profiles ADD COLUMN IF NOT EXISTS documents jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE vendor_profiles ADD COLUMN IF NOT EXISTS verification_status text NOT NULL DEFAULT 'pending';
     ALTER TABLE vendor_profiles ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now();
@@ -194,6 +195,12 @@ export async function runStartupMigrations() {
     ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS certifications jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS documents jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS whatsapp text;
+    ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS payout_method text;
+    ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS bank_name text;
+    ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS account_name text;
+    ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS account_number text;
+    ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS mobile_money_provider text;
+    ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS mobile_money_number text;
     ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS verification_status text NOT NULL DEFAULT 'pending';
     ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now();
     ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS updated_at timestamp NOT NULL DEFAULT now();
@@ -327,6 +334,22 @@ export async function runStartupMigrations() {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount integer NOT NULL DEFAULT 0;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at timestamp NOT NULL DEFAULT now();
   `, "orders compatibility columns");
+
+  await execSafe(`
+    CREATE TABLE IF NOT EXISTS order_vendor_fulfillments (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id varchar NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      vendor_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      subtotal integer NOT NULL CHECK (subtotal >= 0),
+      status text NOT NULL DEFAULT 'pending',
+      notes text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now(),
+      UNIQUE (order_id, vendor_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_vendor_fulfillments_vendor_created
+      ON order_vendor_fulfillments(vendor_id, created_at DESC);
+  `, "order vendor fulfillment table");
 
   await execSafe(`
     CREATE TABLE IF NOT EXISTS wallets (

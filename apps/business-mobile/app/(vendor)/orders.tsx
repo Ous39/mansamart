@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, Pressable, FlatList, Platform, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, Pressable, FlatList, Platform, ActivityIndicator, Alert, RefreshControl } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -12,14 +12,17 @@ interface OrderItem { productId: string; name: string; price: number; quantity: 
 interface ApiOrder {
   id: string; userId: string; items: OrderItem[]; subtotal: number; shipping: number;
   total: number; address: string; city: string; phone: string; paymentMethod: string;
-  status: string; notes?: string; createdAt: string;
+  status: string; marketplaceOrderStatus?: string; vendorStatus: string; paymentStatus: string; notes?: string; createdAt: string;
 }
 
-const FILTER_OPTIONS = ["All", "Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
+const FILTER_OPTIONS = ["All", "Pending", "Confirmed", "Preparing", "Ready"];
 
 function getStatusStyle(status: string) {
   const map: Record<string, { bg: string; text: string }> = {
     pending: { bg: "#FFFBEB", text: "#D97706" },
+    confirmed: { bg: "#EFF6FF", text: "#2563EB" },
+    preparing: { bg: "#F3E8FF", text: "#7B4FA3" },
+    ready_for_pickup: { bg: "#D1FAE5", text: "#059669" },
     processing: { bg: "#EFF6FF", text: "#2563EB" },
     shipped: { bg: "#F0FDF4", text: "#16A34A" },
     delivered: { bg: "#D1FAE5", text: "#059669" },
@@ -34,19 +37,23 @@ export default function VendorOrdersScreen() {
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
   const queryClient = useQueryClient();
 
-  const { data: allOrders = [], isLoading } = useQuery<ApiOrder[]>({
+  const { data: allOrders = [], isLoading, refetch, isRefetching } = useQuery<ApiOrder[]>({
     queryKey: ["/api/orders"],
   });
 
   const updateStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
-      apiRequest("PATCH", `/api/orders/${id}/status`, { status }),
+      apiRequest("PUT", `/api/orders/${id}/status`, { status }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/orders"] }),
+    onError: (error: any) => Alert.alert("Order not updated", error?.message || "Please try again."),
   });
 
   const filtered = filter === "All"
     ? allOrders
-    : allOrders.filter(o => o.status.toLowerCase() === filter.toLowerCase());
+    : allOrders.filter(o => {
+      const wanted = filter === "Ready" ? "ready_for_pickup" : filter.toLowerCase();
+      return o.vendorStatus === wanted;
+    });
 
   return (
     <View style={styles.container}>
@@ -85,6 +92,7 @@ export default function VendorOrdersScreen() {
           keyExtractor={o => o.id}
           contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: 40 + (Platform.OS === "web" ? 34 : 0) }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} />}
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Ionicons name="receipt-outline" size={48} color={Colors.border} />
@@ -92,7 +100,8 @@ export default function VendorOrdersScreen() {
             </View>
           }
           renderItem={({ item: o }) => {
-            const ss = getStatusStyle(o.status);
+            const sellerStatus = o.vendorStatus || "pending";
+            const ss = getStatusStyle(sellerStatus);
             const firstItem = Array.isArray(o.items) ? o.items[0] : null;
             return (
               <View style={styles.orderCard}>
@@ -102,7 +111,7 @@ export default function VendorOrdersScreen() {
                     <Text style={styles.orderDate}>{new Date(o.createdAt).toLocaleDateString()}</Text>
                   </View>
                   <View style={[styles.statusBadge, { backgroundColor: ss.bg }]}>
-                    <Text style={[styles.statusText, { color: ss.text }]}>{o.status}</Text>
+                    <Text style={[styles.statusText, { color: ss.text }]}>{sellerStatus.replace(/_/g, " ")}</Text>
                   </View>
                 </View>
                 {firstItem && (
@@ -121,28 +130,24 @@ export default function VendorOrdersScreen() {
                   </View>
                   <Text style={styles.orderAmount}>D {o.total.toLocaleString()}</Text>
                 </View>
-                {o.status === "pending" && (
+                {o.paymentStatus !== "paid" && o.paymentStatus !== "settled" && (
+                  <View style={styles.paymentWait}><Ionicons name="lock-closed-outline" size={14} color="#B45309" /><Text style={styles.paymentWaitText}>Waiting for verified customer payment</Text></View>
+                )}
+                {sellerStatus === "pending" && ["paid", "settled"].includes(o.paymentStatus) && (
                   <View style={styles.actionRow}>
                     <Pressable
                       style={[styles.actionBtn, { backgroundColor: Colors.primaryLight }]}
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        updateStatus.mutate({ id: o.id, status: "processing" });
+                        updateStatus.mutate({ id: o.id, status: "confirmed" });
                       }}
                     >
-                      <Text style={[styles.actionText, { color: Colors.primary }]}>Accept</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.actionBtn, { backgroundColor: "#FEF2F2" }]}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        updateStatus.mutate({ id: o.id, status: "cancelled" });
-                      }}
-                    >
-                      <Text style={[styles.actionText, { color: Colors.error }]}>Decline</Text>
+                      <Text style={[styles.actionText, { color: Colors.primary }]}>Accept Paid Order</Text>
                     </Pressable>
                   </View>
                 )}
+                {sellerStatus === "confirmed" && <Pressable style={styles.progressBtn} onPress={() => updateStatus.mutate({ id: o.id, status: "preparing" })}><Text style={styles.progressText}>Start Preparing</Text></Pressable>}
+                {sellerStatus === "preparing" && <Pressable style={styles.progressBtn} onPress={() => updateStatus.mutate({ id: o.id, status: "ready_for_pickup" })}><Text style={styles.progressText}>Mark Ready for Pickup</Text></Pressable>}
               </View>
             );
           }}
@@ -179,6 +184,10 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: "row", gap: 8, paddingTop: 4 },
   actionBtn: { flex: 1, alignItems: "center", paddingVertical: 8, borderRadius: 10 },
   actionText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  paymentWait: { flexDirection: "row", alignItems: "center", gap: 6, padding: 9, borderRadius: 9, backgroundColor: "#FFFBEB" },
+  paymentWaitText: { color: "#92400E", fontFamily: "Inter_500Medium", fontSize: 11 },
+  progressBtn: { alignItems: "center", backgroundColor: Colors.primary, paddingVertical: 10, borderRadius: 10, marginTop: 4 },
+  progressText: { color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 13 },
   emptyState: { alignItems: "center", paddingTop: 60, gap: 8 },
   emptyText: { fontSize: 16, fontFamily: "Inter_500Medium", color: Colors.textMuted },
 });

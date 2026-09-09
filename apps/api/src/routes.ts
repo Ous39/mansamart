@@ -11,7 +11,7 @@ import {
   reviews, cartItems, wishlistItems, notifications,
   userActivity, flashDeals, addresses, shopperProfiles, vendorProfiles, providerProfiles, coupons, banners,
   wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
-  orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, pushNotifications, auditLogs,
+  orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, pushNotifications, auditLogs, orderVendorFulfillments,
 } from "@mansamart/database/schema";
 import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql } from "drizzle-orm";
 import {
@@ -23,6 +23,13 @@ import { z } from "zod";
 import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
 import { registerPaymentRoutes } from "./payments/routes";
 import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
+import {
+  VENDOR_FULFILLMENT_STATUSES,
+  availablePayoutBalance,
+  canVendorAdvanceFulfillment,
+  deriveMarketplaceOrderStatus,
+  isBusinessVerified,
+} from "./business-rules";
 
 type RealtimePayload = Record<string, any>;
 type RealtimeEmitter = (event: string, payload: RealtimePayload, rooms?: string[]) => void;
@@ -243,11 +250,40 @@ async function createDefaultProfiles(user: typeof users.$inferSelect) {
   }
 }
 
+async function ensureVendorFulfillments(order: typeof orders.$inferSelect) {
+  const totals = await calculateVendorTotalsFromDb(order);
+  for (const [vendorId, subtotal] of Object.entries(totals)) {
+    await db.insert(orderVendorFulfillments).values({
+      orderId: order.id,
+      vendorId,
+      subtotal: Number(subtotal),
+    }).onConflictDoNothing();
+  }
+}
+
 async function getOrdersForVendor(vendorId: string) {
   const vendorProducts = await db.select().from(products).where(eq(products.vendorId, vendorId));
   const ids = new Set(vendorProducts.map(p => p.id));
   const allOrders = await db.select().from(orders).orderBy(desc(orders.createdAt));
-  return allOrders.filter(o => Array.isArray(o.items) && o.items.some((item: any) => ids.has(item.productId)));
+  const relevant = allOrders.filter(o => Array.isArray(o.items) && o.items.some((item: any) => item.vendorId === vendorId || ids.has(item.productId)));
+  const result = [];
+  for (const order of relevant) {
+    await ensureVendorFulfillments(order);
+    const [fulfillment] = await db.select().from(orderVendorFulfillments)
+      .where(and(eq(orderVendorFulfillments.orderId, order.id), eq(orderVendorFulfillments.vendorId, vendorId)))
+      .limit(1);
+    const vendorItems = (order.items || []).filter((item: any) => item.vendorId === vendorId || ids.has(item.productId));
+    result.push({
+      ...order,
+      items: vendorItems,
+      subtotal: fulfillment?.subtotal ?? vendorItems.reduce((sum: number, item: any) => sum + Number(item.price) * Number(item.quantity || 1), 0),
+      shipping: 0,
+      total: fulfillment?.subtotal ?? vendorItems.reduce((sum: number, item: any) => sum + Number(item.price) * Number(item.quantity || 1), 0),
+      marketplaceOrderStatus: order.status,
+      vendorStatus: fulfillment?.status || "pending",
+    });
+  }
+  return result;
 }
 
 
@@ -872,6 +908,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.role !== "admin") {
         const [vp] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
         vendorProfileForProduct = vp;
+        if (!isBusinessVerified(vp)) {
+          return res.status(403).json({ message: "Your vendor profile must be verified before you can publish products." });
+        }
         const primaryCategory = vp?.shopCategory || user.businessType || "general";
         const allowedCategories = new Set([primaryCategory, ...(Array.isArray(vp?.allowedCategories) ? vp.allowedCategories : [])]);
         if (primaryCategory !== "general" && !allowedCategories.has(data.category)) {
@@ -902,6 +941,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [p] = await db.select().from(products).where(eq(products.id, param(req, "id"))).limit(1);
       if (!p) return res.status(404).json({ message: "Not found" });
       if (user.role !== "admin" && p.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
+      if (user.role !== "admin") {
+        const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
+        if (!isBusinessVerified(profile)) {
+          return res.status(403).json({ message: "Your vendor profile must be verified before you can update products." });
+        }
+      }
 
       const schema = z.object({
         name: z.string().min(1).optional(),
@@ -1027,6 +1072,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isFeatured: z.boolean().optional(),
       });
       const data = schema.parse(req.body);
+      if (user.role !== "admin") {
+        const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
+        if (!isBusinessVerified(profile)) {
+          return res.status(403).json({ message: "Your provider profile must be verified before you can publish services." });
+        }
+      }
       const [s] = await db.insert(services).values({
         ...data,
         area: data.area || user.area || user.city || user.region || "The Gambia",
@@ -1050,6 +1101,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [s] = await db.select().from(services).where(eq(services.id, param(req, "id"))).limit(1);
       if (!s) return res.status(404).json({ message: "Not found" });
       if (user.role !== "admin" && s.providerId !== user.id) return res.status(403).json({ message: "Forbidden" });
+      if (user.role !== "admin") {
+        const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
+        if (!isBusinessVerified(profile)) {
+          return res.status(403).json({ message: "Your provider profile must be verified before you can update services." });
+        }
+      }
       const schema = z.object({
         name: z.string().min(1).optional(),
         description: z.string().optional(),
@@ -1088,6 +1145,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows);
   });
 
+  app.delete("/api/services/:id", requireAuth, requireRole("service_provider", "admin"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const [service] = await db.select().from(services).where(eq(services.id, param(req, "id"))).limit(1);
+    if (!service) return res.status(404).json({ message: "Service not found" });
+    if (user.role !== "admin" && service.providerId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    const [activeBooking] = await db.select().from(bookings).where(and(
+      eq(bookings.serviceId, service.id),
+      inArray(bookings.status, ["pending", "confirmed", "in_progress"]),
+    )).limit(1);
+    if (activeBooking) return res.status(409).json({ message: "Pause this service instead; it still has an active booking." });
+    await db.delete(services).where(eq(services.id, service.id));
+    return res.json({ success: true });
+  });
+
   // ────────────────────────────────────────────────────────────────
   // ORDERS
   // ────────────────────────────────────────────────────────────────
@@ -1112,6 +1183,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const user = (req as any).user;
     const [o] = await db.select().from(orders).where(eq(orders.id, param(req, "id"))).limit(1);
     if (!o) return res.status(404).json({ message: "Not found" });
+    if (user.role === "vendor") {
+      const vendorOrder = (await getOrdersForVendor(user.id)).find((order) => order.id === o.id);
+      if (!vendorOrder) return res.status(403).json({ message: "Forbidden" });
+      return res.json(vendorOrder);
+    }
     if (user.role !== "admin" && o.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
     return res.json(o);
   });
@@ -1187,6 +1263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paymentStatus: "pending",
         fulfillmentType: data.fulfillmentType,
       }).returning();
+      await ensureVendorFulfillments(o);
       const qrs = await ensureOrderQrs(o.id);
 
       // Clear cart after order
@@ -1207,16 +1284,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/orders/:id/status", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
     try {
-      const { status } = z.object({ status: z.string() }).parse(req.body);
       const user = (req as any).user;
-      const [o] = await db.update(orders)
-        .set({ status: status as any, updatedAt: new Date() })
-        .where(eq(orders.id, param(req, "id")))
-        .returning();
-      await addTracking(o.id, status, `Order status updated`, `Order status changed to ${status}.`, user);
-      await notifyOrderParties(o, "Order Updated", `Order status changed to ${status}.`, "order");
-      return res.json(o);
-    } catch {
+      const orderId = param(req, "id");
+      const [currentOrder] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      if (!currentOrder) return res.status(404).json({ message: "Order not found" });
+
+      if (user.role === "admin") {
+        const { status } = z.object({ status: z.enum([
+          "pending", "paid", "confirmed", "processing", "preparing", "ready_for_pickup",
+          "searching_rider", "rider_searching", "rider_assigned", "rider_arrived_vendor",
+          "picked_up", "on_the_way", "shipped", "delivered", "completed", "cancelled", "refunded",
+        ]) }).parse(req.body);
+        const [updated] = await db.update(orders).set({ status, updatedAt: new Date() }).where(eq(orders.id, orderId)).returning();
+        await addTracking(orderId, status, "Order status updated", `Administrator changed the order status to ${status}.`, user);
+        await notifyOrderParties(updated, "Order Updated", `Order status changed to ${status.replace(/_/g, " ")}.`, "order");
+        return res.json(updated);
+      }
+
+      const { status } = z.object({ status: z.enum(VENDOR_FULFILLMENT_STATUSES) }).parse(req.body);
+      await ensureVendorFulfillments(currentOrder);
+      const [fulfillment] = await db.select().from(orderVendorFulfillments).where(and(
+        eq(orderVendorFulfillments.orderId, orderId),
+        eq(orderVendorFulfillments.vendorId, user.id),
+      )).limit(1);
+      if (!fulfillment) return res.status(403).json({ message: "This order does not contain items from your business." });
+      if (!canVendorAdvanceFulfillment(fulfillment.status, status, currentOrder.paymentStatus)) {
+        return res.status(409).json({ message: "That fulfillment change is not allowed. Payment must be confirmed and steps must be completed in order." });
+      }
+
+      await db.update(orderVendorFulfillments).set({ status, updatedAt: new Date() }).where(eq(orderVendorFulfillments.id, fulfillment.id));
+      const fulfillmentRows = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, orderId));
+      const marketplaceStatus = deriveMarketplaceOrderStatus(currentOrder.status, fulfillmentRows.map((row) => row.status));
+      const [updatedOrder] = marketplaceStatus === currentOrder.status
+        ? [currentOrder]
+        : await db.update(orders).set({ status: marketplaceStatus as any, updatedAt: new Date() }).where(eq(orders.id, orderId)).returning();
+      await addTracking(orderId, status, "Seller fulfillment updated", `A seller marked their portion as ${status.replace(/_/g, " ")}.`, user, { vendorId: user.id });
+      await notifyUser(currentOrder.userId, "order", "Order Updated", `A seller marked part of your order as ${status.replace(/_/g, " ")}.`, `/order/${orderId}`, { orderId, status });
+      const vendorOrder = (await getOrdersForVendor(user.id)).find((order) => order.id === orderId);
+      return res.json(vendorOrder || { ...updatedOrder, vendorStatus: status });
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Invalid order status" });
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -1826,6 +1933,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       instagram: z.string().optional(),
       businessRegistrationNo: z.string().optional(),
       taxNumber: z.string().optional(),
+      payoutMethod: z.enum(["bank_transfer", "mobile_money"]).optional().or(z.literal("")),
       bankName: z.string().optional(),
       accountName: z.string().optional(),
       accountNumber: z.string().optional(),
@@ -1884,7 +1992,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/providers/profile", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const schema = z.object({ displayName: z.string().optional(), bio: z.string().optional(), location: z.string().optional(), serviceAreas: z.array(z.string()).optional(), certifications: z.array(z.string()).optional(), whatsapp: z.string().optional(), responseTime: z.string().optional() });
+    const schema = z.object({
+      displayName: z.string().optional(), bio: z.string().optional(), location: z.string().optional(),
+      serviceAreas: z.array(z.string()).optional(), certifications: z.array(z.string()).optional(),
+      whatsapp: z.string().optional(), responseTime: z.string().optional(),
+      payoutMethod: z.enum(["bank_transfer", "mobile_money"]).optional().or(z.literal("")),
+      bankName: z.string().optional(), accountName: z.string().optional(), accountNumber: z.string().optional(),
+      mobileMoneyProvider: z.string().optional(), mobileMoneyNumber: z.string().optional(),
+    });
     const data = schema.parse(req.body);
     const existing = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
     if (existing.length === 0) {
@@ -2049,7 +2164,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/admin/verify/provider/:userId", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
     const { status, note } = z.object({ status: z.enum(["verified", "rejected"]), note: z.string().optional() }).parse(req.body);
-    const [pp] = await db.update(providerProfiles).set({ verificationStatus: status, verificationNote: note }).where(eq(providerProfiles.userId, param(req, "userId"))).returning();
+    const [pp] = await db.update(providerProfiles).set({ verificationStatus: status, verificationNote: note, updatedAt: new Date() }).where(eq(providerProfiles.userId, param(req, "userId"))).returning();
     if (!pp) return res.status(404).json({ message: "Provider profile not found" });
     await db.update(users).set({ role: "service_provider", verificationStatus: status, isVerified: status === "verified", profileEditLocked: status === "verified" }).where(eq(users.id, param(req, "userId")));
     await db.insert(notifications).values({ userId: param(req, "userId"), type: "verification", title: status === "verified" ? "🎉 Profile Verified!" : "Verification Update", body: status === "verified" ? "Your provider profile has been verified!" : `Update: ${note || "Please resubmit documents."}`, icon: status === "verified" ? "checkmark-circle" : "alert-circle", color: status === "verified" ? "#0EA47A" : "#E63946" });
@@ -2148,11 +2263,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
       const vendorProducts = await db.select().from(products).where(eq(products.vendorId, user.id)).orderBy(desc(products.createdAt));
       const vendorOrders = await getOrdersForVendor(user.id);
-      const revenue = vendorOrders.filter(o => o.status !== "cancelled").reduce((sum, o) => {
-        const vendorProductIds = new Set(vendorProducts.map(p => p.id));
-        const orderTotal = (o.items as any[]).filter(i => vendorProductIds.has(i.productId)).reduce((s, i) => s + (Number(i.price) * Number(i.quantity || 1)), 0);
-        return sum + orderTotal;
-      }, 0);
+      const revenue = vendorOrders
+        .filter(o => ["paid", "settled"].includes(o.paymentStatus) && !["cancelled", "refunded"].includes(o.status))
+        .reduce((sum, o) => sum + Number(o.subtotal || 0), 0);
       const lowStock = vendorProducts.filter(p => p.stock <= 5).slice(0, 10);
       const categoryStats = Object.values(vendorProducts.reduce((acc: Record<string, any>, p) => {
         const key = p.category || "Other";
@@ -2167,7 +2280,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         activeProducts: vendorProducts.filter(p => p.inStock).length,
         lowStock: lowStock.length,
         orders: vendorOrders.length,
-        pendingOrders: vendorOrders.filter(o => o.status === "pending" || o.status === "processing").length,
+        pendingOrders: vendorOrders.filter(o => o.vendorStatus === "pending").length,
+        preparingOrders: vendorOrders.filter(o => o.vendorStatus === "confirmed" || o.vendorStatus === "preparing").length,
         revenue,
         avgRating: vendorProducts.length ? Number((vendorProducts.reduce((s, p) => s + p.rating, 0) / vendorProducts.length).toFixed(1)) : 0,
         completenessScore,
@@ -2177,6 +2291,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ message: "Failed to load vendor dashboard" });
+    }
+  });
+
+  app.get("/api/provider/dashboard", requireAuth, requireRole("service_provider", "admin"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
+      const providerServices = await db.select().from(services).where(eq(services.providerId, user.id)).orderBy(desc(services.createdAt));
+      const providerBookings = await db.select().from(bookings).where(eq(bookings.providerId, user.id)).orderBy(desc(bookings.createdAt));
+      const completedBookings = providerBookings.filter((booking) => booking.status === "completed");
+      const revenue = completedBookings.reduce((sum, booking) => sum + Number(booking.price || 0), 0);
+      return res.json({
+        profile,
+        stats: {
+          services: providerServices.length,
+          activeServices: providerServices.filter((service) => service.isAvailable).length,
+          bookings: providerBookings.length,
+          pendingBookings: providerBookings.filter((booking) => booking.status === "pending").length,
+          confirmedBookings: providerBookings.filter((booking) => booking.status === "confirmed" || booking.status === "in_progress").length,
+          completedBookings: completedBookings.length,
+          revenue,
+          rating: profile?.rating || 0,
+        },
+        recentBookings: providerBookings.slice(0, 8),
+        recentServices: providerServices.slice(0, 8),
+      });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ message: "Failed to load provider dashboard" });
     }
   });
 
@@ -2265,10 +2408,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }).parse(req.body);
       const [product] = await db.select().from(products).where(and(eq(products.id, productId), eq(products.vendorId, user.id))).limit(1);
       if (!product) return res.status(404).json({ message: "Product not found or not yours" });
+      const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
+      if (!isBusinessVerified(profile)) return res.status(403).json({ message: "Your vendor profile must be verified before creating promotions." });
+      if (dealPrice >= product.price) return res.status(400).json({ message: "Deal price must be lower than the current product price." });
+      const verifiedDiscount = Math.max(1, Math.min(99, Math.round((1 - dealPrice / product.price) * 100)));
       const startTime = new Date();
       const endTime = new Date(Date.now() + durationHours * 60 * 60 * 1000);
       const [deal] = await db.insert(flashDeals).values({
-        productId, dealPrice, discountPercent, originalPrice: product.price, startTime, endTime, isActive: true,
+        productId, dealPrice, discountPercent: verifiedDiscount, originalPrice: product.price, startTime, endTime, isActive: true,
       }).returning();
       return res.status(201).json({ ...deal, product });
     } catch (err: any) {
@@ -2279,8 +2426,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/vendor/flash-deals/:id", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
     try {
+      const user = (req as any).user;
       const [deal] = await db.select().from(flashDeals).where(eq(flashDeals.id, param(req, "id"))).limit(1);
       if (!deal) return res.status(404).json({ message: "Not found" });
+      if (user.role !== "admin") {
+        const [product] = await db.select().from(products).where(eq(products.id, deal.productId)).limit(1);
+        if (!product || product.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
+      }
       await db.update(flashDeals).set({ isActive: false }).where(eq(flashDeals.id, param(req, "id")));
       return res.json({ success: true });
     } catch { return res.status(500).json({ message: "Server error" }); }
@@ -2294,6 +2446,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = (req as any).user;
       const [product] = await db.select().from(products).where(and(eq(products.id, param(req, "id")), eq(products.vendorId, user.id))).limit(1);
       if (!product) return res.status(404).json({ message: "Product not found or not yours" });
+      const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
+      if (!isBusinessVerified(profile)) return res.status(403).json({ message: "Your vendor profile must be verified before featuring products." });
       const [updated] = await db.update(products).set({ isFeatured: true }).where(eq(products.id, param(req, "id"))).returning();
       return res.json(updated);
     } catch { return res.status(500).json({ message: "Server error" }); }
@@ -2349,7 +2503,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         coverImage: z.string().optional(),
       }).parse(req.body);
       const [pp] = await db.update(providerProfiles)
-        .set({ ...(certifications ? { certifications } : {}), ...(documents ? { documents } : {}), ...(profileImage ? { profileImage } : {}), ...(coverImage ? { coverImage } : {}), updatedAt: new Date() })
+        .set({ ...(certifications ? { certifications } : {}), ...(documents ? { documents, verificationStatus: "pending" } : {}), ...(profileImage ? { profileImage } : {}), ...(coverImage ? { coverImage } : {}), updatedAt: new Date() })
         .where(eq(providerProfiles.userId, user.id)).returning();
       if (!pp) return res.status(404).json({ message: "Provider profile not found" });
       return res.json(pp);
@@ -2406,6 +2560,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const wallet = await getOrCreateWallet(user.id);
     const recent = await db.select().from(transactions).where(eq(transactions.userId, user.id)).orderBy(desc(transactions.createdAt)).limit(30);
     return res.json({ wallet, transactions: recent });
+  });
+
+  app.get("/api/business/finance", requireAuth, requireRole("vendor", "service_provider"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const wallet = await getOrCreateWallet(user.id);
+    const [recentTransactions, recentSettlements, recentPayouts] = await Promise.all([
+      db.select().from(transactions).where(eq(transactions.userId, user.id)).orderBy(desc(transactions.createdAt)).limit(50),
+      db.select().from(settlements).where(eq(settlements.beneficiaryId, user.id)).orderBy(desc(settlements.createdAt)).limit(50),
+      db.select().from(payouts).where(eq(payouts.userId, user.id)).orderBy(desc(payouts.createdAt)).limit(50),
+    ]);
+    const pendingAmounts = recentPayouts.filter((payout) => payout.status === "pending").map((payout) => payout.amount);
+    const [profile] = user.role === "vendor"
+      ? await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1)
+      : await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
+    return res.json({
+      wallet,
+      transactions: recentTransactions,
+      settlements: recentSettlements,
+      payouts: recentPayouts,
+      summary: {
+        availableForPayout: availablePayoutBalance(wallet.balance, pendingAmounts),
+        pendingPayout: pendingAmounts.reduce((sum, amount) => sum + amount, 0),
+        totalSettled: recentSettlements.filter((settlement) => settlement.status === "completed").reduce((sum, settlement) => sum + settlement.amount, 0),
+        totalPaidOut: recentPayouts.filter((payout) => payout.status === "completed").reduce((sum, payout) => sum + payout.amount, 0),
+      },
+      payoutProfile: {
+        verificationStatus: profile?.verificationStatus || "pending",
+        method: profile?.payoutMethod || (profile?.mobileMoneyNumber ? "mobile_money" : profile?.accountNumber ? "bank_transfer" : ""),
+        accountName: profile?.accountName || user.name,
+        accountNumber: profile?.mobileMoneyNumber || profile?.accountNumber || "",
+        provider: profile?.mobileMoneyProvider || profile?.bankName || "",
+      },
+    });
   });
 
   app.post("/api/wallet/deposit/manual", requireAuth, async (req: Request, res: Response) => {
@@ -2467,13 +2654,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/payouts", requireAuth, requireRole("vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { amount, method, accountName, accountNumber } = z.object({ amount: z.number().int().positive(), method: z.string(), accountName: z.string().optional(), accountNumber: z.string().optional() }).parse(req.body);
-      const wallet = await getOrCreateWallet(user.id);
-      if (wallet.balance < amount) return res.status(400).json({ message: "Insufficient wallet balance" });
-      const [payout] = await db.insert(payouts).values({ userId: user.id, amount, method, accountName, accountNumber, status: "pending" }).returning();
+      const { amount, method, accountName, accountNumber } = z.object({
+        amount: z.number().int().min(50),
+        method: z.enum(["bank_transfer", "mobile_money"]),
+        accountName: z.string().trim().min(2).max(160),
+        accountNumber: z.string().trim().min(5).max(100),
+      }).parse(req.body);
+      if (user.role === "vendor") {
+        const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
+        if (!isBusinessVerified(profile)) return res.status(403).json({ message: "Your vendor profile must be verified before requesting a payout." });
+      } else if (user.role === "service_provider") {
+        const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
+        if (!isBusinessVerified(profile)) return res.status(403).json({ message: "Your provider profile must be verified before requesting a payout." });
+      }
+      const payout = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM wallets WHERE user_id = ${user.id} FOR UPDATE`);
+        const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, user.id)).limit(1);
+        if (!wallet) throw new Error("Wallet not found");
+        const pending = await tx.select().from(payouts).where(and(eq(payouts.userId, user.id), eq(payouts.status, "pending")));
+        const available = availablePayoutBalance(wallet.balance, pending.map((item) => item.amount));
+        if (available < amount) throw new Error("Insufficient available settlement balance");
+        const [created] = await tx.insert(payouts).values({ userId: user.id, amount, method, accountName, accountNumber, status: "pending" }).returning();
+        return created;
+      });
       return res.status(201).json(payout);
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
+      if (["Wallet not found", "Insufficient available settlement balance"].includes(err.message)) return res.status(400).json({ message: err.message });
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -2507,6 +2714,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/payouts", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
     const rows = await db.select().from(payouts).orderBy(desc(payouts.createdAt)).limit(100);
     return res.json(rows);
+  });
+
+  app.put("/api/admin/payouts/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user;
+      const { status, note } = z.object({ status: z.enum(["approved", "rejected", "completed"]), note: z.string().trim().max(1000).optional() }).parse(req.body);
+      const [current] = await db.select().from(payouts).where(eq(payouts.id, param(req, "id"))).limit(1);
+      if (!current) return res.status(404).json({ message: "Payout request not found" });
+      const allowed = (current.status === "pending" && ["approved", "rejected"].includes(status)) || (current.status === "approved" && ["completed", "rejected"].includes(status));
+      if (!allowed) return res.status(409).json({ message: "That payout status change is not allowed" });
+
+      const updated = await db.transaction(async (tx) => {
+        if (status === "completed") {
+          await tx.execute(sql`SELECT id FROM wallets WHERE user_id = ${current.userId} FOR UPDATE`);
+          const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, current.userId)).limit(1);
+          if (!wallet || wallet.balance < current.amount) throw new Error("Insufficient settlement balance");
+          const balanceAfter = wallet.balance - current.amount;
+          await tx.update(wallets).set({ balance: balanceAfter, updatedAt: new Date() }).where(eq(wallets.id, wallet.id));
+          await tx.insert(transactions).values({
+            walletId: wallet.id, userId: current.userId, type: "payout", direction: "debit", amount: current.amount,
+            balanceBefore: wallet.balance, balanceAfter, status: "completed", method: current.method,
+            reference: current.id, description: "Business payout completed",
+          });
+        }
+        const [row] = await tx.update(payouts).set({ status, note, updatedAt: new Date() }).where(eq(payouts.id, current.id)).returning();
+        return row;
+      });
+      await audit(admin.id, `payout.${status}`, "payout", current.id, { amount: current.amount, userId: current.userId, note });
+      await notifyUser(current.userId, "payment", "Payout Updated", `Your payout request for D ${current.amount.toLocaleString()} is now ${status}.`, "/wallet", { payoutId: current.id, status });
+      return res.json(updated);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Invalid payout update" });
+      if (error.message === "Insufficient settlement balance") return res.status(409).json({ message: error.message });
+      return res.status(500).json({ message: "Payout update failed" });
+    }
   });
 
   // ────────────────────────────────────────────────────────────────
@@ -2667,10 +2909,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/delivery/dispatch", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
     try {
+      const user = (req as any).user;
       const { orderId, pickupAddress, pickupLatitude, pickupLongitude, dropoffAddress, dropoffLatitude, dropoffLongitude, deliveryFee } = z.object({
         orderId: z.string(), pickupAddress: z.string(), pickupLatitude: z.number().optional(), pickupLongitude: z.number().optional(), dropoffAddress: z.string(), dropoffLatitude: z.number().optional(), dropoffLongitude: z.number().optional(), deliveryFee: z.number().int().default(0),
       }).parse(req.body);
-      const [delivery] = await db.insert(deliveries).values({ orderId, pickupAddress, pickupLatitude, pickupLongitude, dropoffAddress, dropoffLatitude, dropoffLongitude, deliveryFee, status: "searching" }).returning();
+      const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      if (!order) return res.status(404).json({ message: "Order not found" });
+      await ensureVendorFulfillments(order);
+      const parties = await getOrderParties(order);
+      const fulfillments = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, orderId));
+      if (user.role !== "admin" && !parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
+      if (user.role !== "admin" && (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup"))) return res.status(409).json({ message: "Every seller must mark their items ready before dispatch." });
+      const safeDropoffAddress = user.role === "admin" ? dropoffAddress : `${order.address}, ${order.city}`;
+      const safeDropoffLatitude = user.role === "admin" ? dropoffLatitude : order.deliveryLatitude;
+      const safeDropoffLongitude = user.role === "admin" ? dropoffLongitude : order.deliveryLongitude;
+      const safeDeliveryFee = user.role === "admin" ? deliveryFee : order.shipping;
+      const [delivery] = await db.insert(deliveries).values({ orderId, pickupAddress, pickupLatitude, pickupLongitude, dropoffAddress: safeDropoffAddress, dropoffLatitude: safeDropoffLatitude, dropoffLongitude: safeDropoffLongitude, deliveryFee: safeDeliveryFee, status: "searching" }).returning();
       const riders = await db.select().from(deliveryRiders).where(and(eq(deliveryRiders.isOnline, true), eq(deliveryRiders.isAvailable, true), eq(deliveryRiders.verificationStatus, "verified")));
       const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, pickupLatitude, pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
       for (const rider of nearest) {
@@ -2765,6 +3019,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .where(eq(returnRequests.userId, user.id))
       .orderBy(desc(returnRequests.createdAt));
     return res.json(rows.map(({ request, orderTotal, orderStatus }) => ({ ...request, orderTotal, orderStatus })));
+  });
+
+  app.get("/api/business/returns", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const vendorOrders = await getOrdersForVendor(user.id);
+    if (vendorOrders.length === 0) return res.json([]);
+    const orderById = new Map(vendorOrders.map((order) => [order.id, order]));
+    const rows = await db.select().from(returnRequests)
+      .where(inArray(returnRequests.orderId, vendorOrders.map((order) => order.id)))
+      .orderBy(desc(returnRequests.createdAt));
+    return res.json(rows.map((request) => {
+      const order = orderById.get(request.orderId);
+      return {
+        ...request,
+        orderStatus: order?.marketplaceOrderStatus || order?.status,
+        vendorStatus: order?.vendorStatus,
+        vendorSubtotal: order?.subtotal || 0,
+        items: order?.items || [],
+      };
+    }));
   });
 
   app.get("/api/customer/return-eligibility", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
@@ -2904,12 +3178,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const orderId = param(req, "id");
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ message: "Order not found" });
-    const parties = await getOrderParties(order);
-    if (user.role !== "admin" && !parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
-    const [updated] = await db.update(orders).set({ status: "confirmed" as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
-    await addTracking(order.id, "confirmed", "Order confirmed", "Vendor confirmed the order.", user);
-    await notifyOrderParties(updated, "Order Confirmed", "Vendor has confirmed your order.", "order");
-    return res.json(updated);
+    if (user.role === "admin") {
+      const [updated] = await db.update(orders).set({ status: "confirmed" as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
+      return res.json(updated);
+    }
+    await ensureVendorFulfillments(order);
+    const [fulfillment] = await db.select().from(orderVendorFulfillments).where(and(eq(orderVendorFulfillments.orderId, order.id), eq(orderVendorFulfillments.vendorId, user.id))).limit(1);
+    if (!fulfillment) return res.status(403).json({ message: "Forbidden" });
+    if (!canVendorAdvanceFulfillment(fulfillment.status, "confirmed", order.paymentStatus)) return res.status(409).json({ message: "Payment must be confirmed before accepting this order." });
+    await db.update(orderVendorFulfillments).set({ status: "confirmed", updatedAt: new Date() }).where(eq(orderVendorFulfillments.id, fulfillment.id));
+    const all = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, order.id));
+    const nextOrderStatus = deriveMarketplaceOrderStatus(order.status, all.map((row) => row.status));
+    const [updated] = nextOrderStatus === order.status ? [order] : await db.update(orders).set({ status: nextOrderStatus as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
+    await addTracking(order.id, "confirmed", "Seller confirmed items", "A seller confirmed their portion of the order.", user, { vendorId: user.id });
+    await notifyUser(order.userId, "order", "Seller Confirmed Items", "A seller confirmed their portion of your order.", `/order/${order.id}`);
+    return res.json({ ...updated, vendorStatus: "confirmed" });
   });
 
   app.post("/api/orders/:id/ready-for-pickup", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
@@ -2917,13 +3200,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const orderId = param(req, "id");
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ message: "Order not found" });
-    const parties = await getOrderParties(order);
-    if (user.role !== "admin" && !parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
-    await ensureOrderQrs(order.id);
-    const [updated] = await db.update(orders).set({ status: "ready_for_pickup" as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
-    await addTracking(order.id, "ready_for_pickup", "Order ready", "Vendor marked the order as ready.", user);
-    await notifyOrderParties(updated, "Order Ready", "Your order is ready for pickup/delivery.", "order");
-    return res.json(updated);
+    if (user.role === "admin") {
+      await ensureOrderQrs(order.id);
+      const [updated] = await db.update(orders).set({ status: "ready_for_pickup" as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
+      return res.json(updated);
+    }
+    await ensureVendorFulfillments(order);
+    const [fulfillment] = await db.select().from(orderVendorFulfillments).where(and(eq(orderVendorFulfillments.orderId, order.id), eq(orderVendorFulfillments.vendorId, user.id))).limit(1);
+    if (!fulfillment) return res.status(403).json({ message: "Forbidden" });
+    if (!canVendorAdvanceFulfillment(fulfillment.status, "ready_for_pickup", order.paymentStatus)) return res.status(409).json({ message: "Mark these items as preparing before marking them ready." });
+    await db.update(orderVendorFulfillments).set({ status: "ready_for_pickup", updatedAt: new Date() }).where(eq(orderVendorFulfillments.id, fulfillment.id));
+    const all = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, order.id));
+    const nextOrderStatus = deriveMarketplaceOrderStatus(order.status, all.map((row) => row.status));
+    if (nextOrderStatus === "ready_for_pickup") await ensureOrderQrs(order.id);
+    const [updated] = nextOrderStatus === order.status ? [order] : await db.update(orders).set({ status: nextOrderStatus as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
+    await addTracking(order.id, "ready_for_pickup", "Seller items ready", "A seller marked their items ready for pickup.", user, { vendorId: user.id });
+    await notifyUser(order.userId, "order", "Seller Items Ready", "A seller marked their portion of your order ready.", `/order/${order.id}`);
+    return res.json({ ...updated, vendorStatus: "ready_for_pickup" });
   });
 
   app.post("/api/orders/:id/dispatch-rider", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
@@ -2934,6 +3227,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!order) return res.status(404).json({ message: "Order not found" });
       const parties = await getOrderParties(order);
       if (user.role !== "admin" && !parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
+      await ensureVendorFulfillments(order);
+      const fulfillments = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, order.id));
+      if (user.role !== "admin" && (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup"))) {
+        return res.status(409).json({ message: "Every seller must mark their items ready before dispatching a rider." });
+      }
       const body = z.object({ pickupAddress: z.string().optional(), pickupLatitude: z.number().optional(), pickupLongitude: z.number().optional(), deliveryFee: z.number().int().optional() }).parse(req.body || {});
       const pickupAddress = body.pickupAddress || "Vendor location";
       const [delivery] = await db.insert(deliveries).values({

@@ -1,14 +1,17 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, Pressable, ScrollView, TextInput,
-  Platform, ActivityIndicator, KeyboardAvoidingView,
+  Platform, ActivityIndicator, KeyboardAvoidingView, Alert, Image,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { serviceCategories } from "@/data/services";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/query-client";
+import { pickAndUploadImage } from "@/lib/upload-image";
 
 const PRICE_TYPES = [
   { id: "fixed", label: "Fixed Price" },
@@ -17,6 +20,9 @@ const PRICE_TYPES = [
 ];
 
 export default function AddServiceScreen() {
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  const serviceId = Array.isArray(id) ? id[0] : id;
+  const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
@@ -25,18 +31,71 @@ export default function AddServiceScreen() {
   const [duration, setDuration] = useState("");
   const [description, setDescription] = useState("");
   const [features, setFeatures] = useState("");
+  const [serviceAreas, setServiceAreas] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [success, setSuccess] = useState(false);
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
 
+  const { data: existing } = useQuery<any>({
+    queryKey: [`/api/services/${serviceId}`],
+    enabled: !!serviceId,
+  });
+
+  React.useEffect(() => {
+    if (!existing) return;
+    setName(existing.name || "");
+    setCategory(existing.category || "");
+    setPrice(String(existing.price || ""));
+    setPriceType(existing.priceType || "fixed");
+    setDuration(existing.duration || "");
+    setDescription(existing.description || "");
+    setFeatures(Array.isArray(existing.features) ? existing.features.join("\n") : "");
+    setServiceAreas(Array.isArray(existing.serviceAreas) ? existing.serviceAreas.join(", ") : "");
+    setImageUrl(existing.imageUrl || "");
+  }, [existing]);
+
   const handleSave = async () => {
-    if (!name || !price || !category) return;
-    setIsLoading(true);
-    await new Promise(r => setTimeout(r, 1200));
-    setIsLoading(false);
-    setSuccess(true);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setTimeout(() => router.back(), 1500);
+    const parsedPrice = Math.round(Number(price));
+    if (!name.trim() || !category || !description.trim() || !Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      Alert.alert("Complete required fields", "Add a name, category, description and valid GMD price.");
+      return;
+    }
+    try {
+      setIsLoading(true);
+      await apiRequest(serviceId ? "PUT" : "POST", serviceId ? `/api/services/${serviceId}` : "/api/services", {
+        name: name.trim(), category, description: description.trim(), price: parsedPrice, priceType,
+        duration: duration.trim() || undefined,
+        features: features.split("\n").map((value) => value.trim()).filter(Boolean),
+        serviceAreas: serviceAreas.split(",").map((value) => value.trim()).filter(Boolean),
+        imageUrl: imageUrl || undefined,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/services/provider/mine"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/provider/dashboard"] });
+      setSuccess(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setTimeout(() => router.back(), 700);
+    } catch (error: any) {
+      const raw = String(error?.message || "Could not save this service.");
+      let message = raw;
+      try { message = JSON.parse(raw.replace(/^\d+:\s*/, "")).message || raw; } catch {}
+      Alert.alert("Service not saved", message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const uploadImage = async () => {
+    try {
+      setIsUploading(true);
+      const url = await pickAndUploadImage("product");
+      if (url) setImageUrl(url);
+    } catch (error: any) {
+      Alert.alert("Upload failed", error?.message || "Could not upload the service photo.");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
@@ -46,7 +105,7 @@ export default function AddServiceScreen() {
           <Pressable onPress={() => router.back()} hitSlop={8}>
             <Ionicons name="arrow-back" size={24} color={Colors.text} />
           </Pressable>
-          <Text style={styles.title}>Add Service</Text>
+          <Text style={styles.title}>{serviceId ? "Edit Service" : "Add Service"}</Text>
           <View style={{ width: 32 }} />
         </View>
 
@@ -89,7 +148,7 @@ export default function AddServiceScreen() {
 
           <View style={styles.priceRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Price ($) *</Text>
+              <Text style={styles.label}>Price (GMD) *</Text>
               <View style={styles.inputWrap}>
                 <TextInput
                   style={styles.input}
@@ -161,6 +220,22 @@ export default function AddServiceScreen() {
             </View>
           </View>
 
+          <View>
+            <Text style={styles.label}>Service Areas (comma separated)</Text>
+            <View style={styles.inputWrap}>
+              <TextInput style={styles.input} value={serviceAreas} onChangeText={setServiceAreas} placeholder="Banjul, Serrekunda, Brikama" placeholderTextColor={Colors.textMuted} />
+            </View>
+          </View>
+
+          <View>
+            <Text style={styles.label}>Service Photo</Text>
+            {imageUrl ? <Image source={{ uri: imageUrl }} style={styles.serviceImage} /> : null}
+            <Pressable style={styles.uploadBtn} onPress={uploadImage} disabled={isUploading}>
+              {isUploading ? <ActivityIndicator color="#7B4FA3" /> : <Ionicons name="image-outline" size={18} color="#7B4FA3" />}
+              <Text style={styles.uploadText}>{imageUrl ? "Replace photo" : "Upload photo"}</Text>
+            </Pressable>
+          </View>
+
           <Pressable
             style={({ pressed }) => [
               styles.saveBtn,
@@ -176,10 +251,10 @@ export default function AddServiceScreen() {
             ) : success ? (
               <>
                 <Ionicons name="checkmark" size={20} color="#fff" />
-                <Text style={styles.saveBtnText}>Service Added!</Text>
+                <Text style={styles.saveBtnText}>Service Saved!</Text>
               </>
             ) : (
-              <Text style={styles.saveBtnText}>Add Service</Text>
+              <Text style={styles.saveBtnText}>{serviceId ? "Save Changes" : "Publish Service"}</Text>
             )}
           </Pressable>
         </ScrollView>
@@ -226,4 +301,7 @@ const styles = StyleSheet.create({
   },
   saveBtnSuccess: { backgroundColor: Colors.success },
   saveBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  serviceImage: { width: "100%", height: 180, borderRadius: 14, marginBottom: 10, backgroundColor: Colors.borderLight },
+  uploadBtn: { height: 48, borderRadius: 12, borderWidth: 1, borderColor: "#7B4FA3", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  uploadText: { color: "#7B4FA3", fontFamily: "Inter_600SemiBold", fontSize: 13 },
 });

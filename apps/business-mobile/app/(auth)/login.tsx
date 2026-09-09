@@ -40,7 +40,7 @@ export default function LoginScreen() {
       const { hasPin, user } = await login(email.trim(), password);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace((hasPin ? "/pin-entry" : getDefaultRouteForRole(user.role)) as any);
-    } catch (e) {
+    } catch {
       setError("Invalid email or password");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
