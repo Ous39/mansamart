@@ -80,6 +80,16 @@ run-business.bat
 
 Choose option 1 for a physical Android or iPhone on the same Wi-Fi, or option 2 for a browser preview. The launcher installs locked dependencies, starts PostgreSQL and the API, applies the current schema, loads development seed accounts, waits for the health check, and runs the Business app on port 8082.
 
+### Windows one-click Website launcher
+
+After installing Node.js 20+ and Docker Desktop, start Docker Desktop and double-click:
+
+```text
+run-web.bat
+```
+
+Choose option 1 to install the locked dependencies, start PostgreSQL and the API, load the development data, wait for the API health check, and open the general marketplace at `http://localhost:4173`. Choose option 2 to stop the local containers while preserving the database volume.
+
 ## Docker
 
 ```bash
@@ -108,6 +118,10 @@ pnpm build
 The customer application includes customer-only registration and login, marketplace browsing, product options, an account-specific offline cart and wishlist, saved delivery addresses, server-priced checkout, Wave handoff, order history and tracking, service booking, verified-purchase reviews, seven-day return/refund requests, notifications, support tickets, profile security, and in-app policy links.
 
 For an existing PostgreSQL deployment, apply `packages/database/migrations/customer_experience_migration.sql` before deploying this customer release. It adds return requests, product-option cart fields, and duplicate-protection indexes. New installations can use `pnpm db:push`.
+
+## General web milestone
+
+The website includes public product and service discovery, search and filtering, detail pages, customer cart and server-priced Wave checkout, order and delivery tracking, bookings, notifications, support, vendor and service-provider dashboards, catalogue controls, finance and payout requests, returns, and rider delivery operations. Each authenticated account is routed to its own role area. Administrator sessions are rejected by the general authentication endpoint and the website sends administrators to the separate secured portal.
 
 ## Wave Checkout
 

@@ -1,0 +1,9 @@
+{
+  "name": "MansaMart",
+  "short_name": "MansaMart",
+  "description": "The Gambia's connected marketplace",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f5ef",
+  "theme_color": "#0b7a5a"
+}
