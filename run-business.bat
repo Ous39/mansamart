@@ -86,8 +86,6 @@ echo API is ready.
 exit /b 0
 
 :run_phone
-call :prepare_project
-if errorlevel 1 goto :failed
 set "LAN_IP="
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$ip = Get-NetIPConfiguration ^| Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } ^| ForEach-Object { $_.IPv4Address.IPAddress } ^| Where-Object { $_ -and $_ -notlike '169.254.*' } ^| Select-Object -First 1; if ($ip) { $ip }"`) do set "LAN_IP=%%I"
 if not defined LAN_IP set "LAN_IP=localhost"
@@ -95,6 +93,8 @@ echo Detected computer IP: %LAN_IP%
 set "CUSTOM_IP="
 set /p "CUSTOM_IP=Press Enter to use it, or type the correct Wi-Fi IPv4 address: "
 if defined CUSTOM_IP set "LAN_IP=%CUSTOM_IP%"
+call :prepare_project
+if errorlevel 1 goto :failed
 set "EXPO_PUBLIC_APP_AUDIENCE=business"
 set "EXPO_PUBLIC_API_URL=http://%LAN_IP%:5000"
 echo.
