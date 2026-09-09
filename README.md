@@ -58,6 +58,18 @@ pnpm dev:rider
 
 When using a physical phone, copy the relevant application's `.env.example` to `.env` and replace `YOUR-LAPTOP-IP` with the computer's Wi-Fi IP address.
 
+### Windows one-click Customer app launcher
+
+Install Node.js 20 or later, Docker Desktop, and Expo Go on the phone. Start Docker Desktop, then double-click:
+
+```text
+run-customer.bat
+```
+
+Choose option 1 to run the app on a physical phone or option 2 to open it in a browser. The launcher installs the exact pnpm dependencies, starts PostgreSQL and the API in Docker, applies the database schema, loads development seed data, waits for the API health check, and starts the Customer Expo application. For phone testing, keep the phone and computer on the same Wi-Fi and scan the displayed QR code using Expo Go.
+
+Use option 3 when you want to stop the local PostgreSQL and API containers. Their database volume is preserved. Wave remains disabled by the provided development environment.
+
 ## Docker
 
 ```bash
