@@ -16,7 +16,7 @@ import { toImageSource } from "@/lib/product-media";
 
 const ALL_AREAS = ["Banjul", "Serrekunda", "Kanifing", "Bakau", "Fajara", "Kotu", "Kololi", "Tallinding", "Brikama", "Farafenni", "Basse", "Kerewan"];
 const VEHICLE_TYPES = ["Motorbike", "Car", "Van", "Truck", "Bicycle", "Tricycle"];
-const PAYOUT_METHODS = ["Mobile Money", "Bank Transfer", "Cash Office Payout"];
+const PAYOUT_METHODS = ["mobile_money", "bank_transfer"];
 const DOC_TYPES = ["National ID", "Driving License", "Selfie Verification", "Vehicle Registration", "Insurance", "Address Proof"];
 
 type UploadingType = "profile" | "cover" | "doc" | null;
@@ -61,13 +61,12 @@ export default function RiderSettingsScreen() {
   const [nationalIdNumber, setNationalIdNumber] = useState("");
   const [emergencyContactName, setEmergencyContactName] = useState("");
   const [emergencyContactPhone, setEmergencyContactPhone] = useState("");
-  const [payoutMethod, setPayoutMethod] = useState("Mobile Money");
+  const [payoutMethod, setPayoutMethod] = useState("mobile_money");
   const [mobileMoneyProvider, setMobileMoneyProvider] = useState("");
   const [mobileMoneyNumber, setMobileMoneyNumber] = useState("");
   const [bankName, setBankName] = useState("");
   const [accountName, setAccountName] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
-  const [internalNotes, setInternalNotes] = useState("");
   const [documents, setDocuments] = useState<any[]>([]);
   const [docType, setDocType] = useState("National ID");
   const [uploading, setUploading] = useState<UploadingType>(null);
@@ -97,13 +96,12 @@ export default function RiderSettingsScreen() {
     setNationalIdNumber(profile.nationalIdNumber || "");
     setEmergencyContactName(profile.emergencyContactName || "");
     setEmergencyContactPhone(profile.emergencyContactPhone || "");
-    setPayoutMethod(profile.payoutMethod || "Mobile Money");
+    setPayoutMethod(String(profile.payoutMethod || "mobile_money").toLowerCase().includes("bank") ? "bank_transfer" : "mobile_money");
     setMobileMoneyProvider(profile.mobileMoneyProvider || "");
     setMobileMoneyNumber(profile.mobileMoneyNumber || "");
     setBankName(profile.bankName || "");
     setAccountName(profile.accountName || "");
     setAccountNumber(profile.accountNumber || "");
-    setInternalNotes(profile.internalNotes || "");
     setDocuments(Array.isArray(profile.documents) ? profile.documents : []);
   }, [profile]);
 
@@ -131,7 +129,7 @@ export default function RiderSettingsScreen() {
     city, district, region, area, serviceZones, vehicleType, vehicleModel, vehicleColor,
     vehiclePlate, vehicleRegistrationNo, licenseNumber, drivingLicenseExpiry, nationalIdNumber,
     emergencyContactName, emergencyContactPhone, payoutMethod, mobileMoneyProvider, mobileMoneyNumber,
-    bankName, accountName, accountNumber, internalNotes, documents,
+    bankName, accountName, accountNumber, documents,
   });
 
   const toggleZone = (zone: string) => {
@@ -332,7 +330,7 @@ export default function RiderSettingsScreen() {
             <View style={styles.areasGrid}>
               {PAYOUT_METHODS.map(method => (
                 <Pressable key={method} onPress={() => setPayoutMethod(method)} style={[styles.areaChip, payoutMethod === method && styles.areaChipActive]}>
-                  <Text style={[styles.areaChipText, payoutMethod === method && styles.areaChipTextActive]}>{method}</Text>
+                  <Text style={[styles.areaChipText, payoutMethod === method && styles.areaChipTextActive]}>{method.replace(/_/g, " ")}</Text>
                 </Pressable>
               ))}
             </View>
@@ -344,15 +342,11 @@ export default function RiderSettingsScreen() {
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Admin Notes</Text>
-            <Field label="Notes for Admin" value={internalNotes} onChange={setInternalNotes} placeholder="Anything admin should know before verifying you" multiline />
-          </View>
-
-          <View style={styles.section}>
             <Text style={styles.sectionTitle}>Manage</Text>
             <QuickLink icon="speedometer-outline" label="Rider Dashboard" onPress={() => router.push("/(rider)/" as any)} />
             <QuickLink icon="list-outline" label="Deliveries" onPress={() => router.push("/(rider)/deliveries" as any)} />
             <QuickLink icon="wallet-outline" label="Earnings & Wallet" onPress={() => router.push("/(rider)/earnings" as any)} />
+            <QuickLink icon="help-buoy-outline" label="Rider Support & Safety" onPress={() => router.push("/support" as any)} />
           </View>
 
           <Pressable style={styles.logoutBtn} onPress={() => { logout(); router.replace("/(auth)/login"); }}>

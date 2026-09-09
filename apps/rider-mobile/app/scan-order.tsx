@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import { View, Text, StyleSheet, Pressable, TextInput, ActivityIndicator, Alert } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { apiRequest, queryClient } from "@/lib/query-client";
 import { safeBack } from "@/lib/navigation";
 
 export default function ScanOrderScreen() {
+  const { stage, orderId } = useLocalSearchParams<{ stage?: "pickup" | "delivery"; orderId?: string }>();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -41,7 +42,7 @@ export default function ScanOrderScreen() {
         <Pressable onPress={() => safeBack("/")} hitSlop={8} style={styles.iconBtn}>
           <Ionicons name="arrow-back" size={23} color={Colors.text} />
         </Pressable>
-        <Text style={styles.title}>Scan Order</Text>
+        <Text style={styles.title}>{stage === "pickup" ? "Verify Pickup" : stage === "delivery" ? "Verify Delivery" : "Verify Handover"}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -49,22 +50,23 @@ export default function ScanOrderScreen() {
         <View style={styles.scanCircle}>
           <Ionicons name="scan-outline" size={54} color={Colors.primary} />
         </View>
-        <Text style={styles.heroTitle}>Order QR Verification</Text>
-        <Text style={styles.heroText}>Use this for vendor-to-rider pickup and rider-to-shopper delivery confirmation.</Text>
+        <Text style={styles.heroTitle}>{stage === "pickup" ? "Vendor handover" : stage === "delivery" ? "Customer handover" : "One-time QR verification"}</Text>
+        <Text style={styles.heroText}>{stage === "pickup" ? "Enter the pickup code shown by the seller. Only the assigned rider can use it." : stage === "delivery" ? "Ask the customer for their delivery code after handing over the order. This releases the delivery payment." : "Enter the one-time code shown by the correct handover party. The code cannot be reused."}</Text>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.label}>Order QR Code</Text>
+        {orderId && <Text style={styles.orderHint}>Order #{String(orderId).slice(0, 8).toUpperCase()}</Text>}
+        <Text style={styles.label}>One-time verification code</Text>
         <TextInput
           style={styles.input}
           value={code}
           onChangeText={setCode}
-          placeholder="Paste or type QR code"
+          placeholder="Enter the code from the QR"
           placeholderTextColor={Colors.textMuted}
           autoCapitalize="characters"
         />
         <Pressable style={[styles.primaryBtn, loading && { opacity: 0.7 }]} onPress={verify} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <><Ionicons name="shield-checkmark-outline" size={18} color="#fff" /><Text style={styles.primaryText}>Verify Order</Text></>}
+          {loading ? <ActivityIndicator color="#fff" /> : <><Ionicons name="shield-checkmark-outline" size={18} color="#fff" /><Text style={styles.primaryText}>Verify handover</Text></>}
         </Pressable>
       </View>
 
@@ -92,6 +94,7 @@ const styles = StyleSheet.create({
   heroText: { fontFamily: "Inter_400Regular", fontSize: 14, color: Colors.textSecondary, textAlign: "center", lineHeight: 21, marginTop: 8, paddingHorizontal: 10 },
   card: { backgroundColor: Colors.surface, borderRadius: 22, padding: 18, borderWidth: 1, borderColor: Colors.border },
   label: { fontFamily: "Inter_600SemiBold", fontSize: 13, color: Colors.text, marginBottom: 8 },
+  orderHint: { alignSelf: "flex-start", backgroundColor: Colors.primaryLight, color: Colors.primary, borderRadius: 10, overflow: "hidden", paddingHorizontal: 10, paddingVertical: 6, fontFamily: "Inter_700Bold", fontSize: 11, marginBottom: 12 },
   input: { borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.background, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13, fontFamily: "Inter_500Medium", color: Colors.text, marginBottom: 14 },
   primaryBtn: { backgroundColor: Colors.primary, borderRadius: 14, minHeight: 50, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   primaryText: { color: "#fff", fontFamily: "Inter_700Bold", fontSize: 15 },

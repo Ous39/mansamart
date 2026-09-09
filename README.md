@@ -80,6 +80,16 @@ run-business.bat
 
 Choose option 1 for a physical Android or iPhone on the same Wi-Fi, or option 2 for a browser preview. The launcher installs locked dependencies, starts PostgreSQL and the API, applies the current schema, loads development seed accounts, waits for the health check, and runs the Business app on port 8082.
 
+### Windows one-click Rider app launcher
+
+After installing Node.js 20+, Docker Desktop, and Expo Go, start Docker Desktop and double-click:
+
+```text
+run-rider.bat
+```
+
+Choose option 1 for a physical Android or iPhone on the same Wi-Fi, or option 2 for a browser preview. The launcher installs locked dependencies, starts PostgreSQL and the API, waits for the health check, and runs the dedicated Rider app on port 8083. Rider location sharing is foreground-only: it runs while an accepted delivery is open and the app remains active.
+
 ### Windows one-click Website launcher
 
 After installing Node.js 20+ and Docker Desktop, start Docker Desktop and double-click:

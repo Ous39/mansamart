@@ -40,7 +40,7 @@ export default function LoginScreen() {
       const { hasPin, user } = await login(email.trim(), password);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace((hasPin ? "/pin-entry" : getDefaultRouteForRole(user.role)) as any);
-    } catch (e) {
+    } catch {
       setError("Invalid email or password");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
@@ -80,8 +80,8 @@ export default function LoginScreen() {
               resizeMode="contain"
             />
           </View>
-          <Text style={styles.title}>Welcome Back</Text>
-          <Text style={styles.subtitle}>Sign in to MansaMart</Text>
+          <Text style={styles.title}>Rider sign in</Text>
+          <Text style={styles.subtitle}>Access deliveries, navigation, and earnings</Text>
         </View>
 
         <View style={styles.form}>
@@ -98,7 +98,7 @@ export default function LoginScreen() {
               <Ionicons name="mail-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
-                placeholder="client@mansamart.studio"
+                placeholder="rider@example.com"
                 placeholderTextColor={Colors.textMuted}
                 value={email}
                 onChangeText={setEmail}

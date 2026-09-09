@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from "react";
 import { loadToken, saveToken, clearToken, getToken } from "@/lib/auth-token";
 import { apiRequest, getApiUrl, queryClient } from "@/lib/query-client";
 
@@ -49,7 +49,6 @@ export interface RegisterData {
 
 interface AuthContextValue {
   user: User | null;
-  allUsers: User[];
   isLoading: boolean;
   isAuthenticated: boolean;
   hasPin: boolean;
@@ -58,9 +57,6 @@ interface AuthContextValue {
   register: (data: RegisterData) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (updates: Partial<User>) => Promise<void>;
-  updateUserRole: (userId: string, role: UserRole) => Promise<void>;
-  removeUser: (userId: string) => Promise<void>;
-  refreshUsers: () => Promise<void>;
   setupPin: (pin: string) => Promise<void>;
   verifyPin: (pin: string) => Promise<void>;
   setPinVerified: (v: boolean) => void;
@@ -88,7 +84,6 @@ async function authedGet(path: string) {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasPin, setHasPin] = useState(false);
   const [pinVerified, setPinVerified] = useState(false);
@@ -122,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string): Promise<{ hasPin: boolean; user: User }> => {
     const res = await apiRequest("POST", "/api/auth/login", { email, password });
     const data = await res.json();
+    if (!data?.user || !roleAllowed(data.user.role)) throw new Error("This account cannot use MansaMart Rider");
     await saveToken(data.token);
     setUser(data.user);
     setHasPin(!!data.hasPin);
@@ -133,6 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (registerData: RegisterData): Promise<void> => {
     const res = await apiRequest("POST", "/api/auth/register", registerData);
     const data = await res.json();
+    if (!data?.user || !roleAllowed(data.user.role)) throw new Error("Rider registration did not return a rider account");
     await saveToken(data.token);
     setUser(data.user);
     setHasPin(false);
@@ -146,7 +143,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setHasPin(false);
     setPinVerified(false);
-    setAllUsers([]);
     queryClient.clear();
   };
 
@@ -168,31 +164,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPinVerified(true);
   };
 
-  const updateUserRole = async (userId: string, role: UserRole) => {
-    await apiRequest("PUT", `/api/admin/users/${userId}/role`, { role });
-    setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, role } : u));
-    if (user?.id === userId) setUser(prev => prev ? { ...prev, role } : null);
-  };
-
-  const removeUser = async (userId: string) => {
-    await apiRequest("DELETE", `/api/admin/users/${userId}`);
-    setAllUsers(prev => prev.filter(u => u.id !== userId));
-  };
-
-  const refreshUsers = useCallback(async () => {
-    try {
-      const res = await authedGet("/api/admin/users");
-      if (res.ok) setAllUsers(await res.json());
-    } catch {}
-  }, []);
-
   const value = useMemo(() => ({
-    user, allUsers, isLoading, isAuthenticated: !!user,
+    user, isLoading, isAuthenticated: !!user,
     hasPin, pinVerified,
     login, register, logout, updateProfile,
-    updateUserRole, removeUser, refreshUsers,
     setupPin, verifyPin, setPinVerified,
-  }), [user, allUsers, isLoading, hasPin, pinVerified]);
+  }), [user, isLoading, hasPin, pinVerified]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -11,17 +11,15 @@
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0EA47A"
+      "backgroundColor": "#2563EB"
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "gm.mansamart.rider",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "MansaMart uses your location to show nearby products, services, vendors, riders, and delivery tracking.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "MansaMart can use background location during active deliveries so shoppers, vendors, and riders can track orders safely.",
-        "NSCameraUsageDescription": "MansaMart uses the camera for profile photos, document uploads, product images, and QR verification.",
-        "NSPhotoLibraryUsageDescription": "MansaMart needs photo library access for profile photos, product images, business documents, and ID verification uploads.",
-        "NSPhotoLibraryAddUsageDescription": "MansaMart may save generated QR codes or receipts to your photo library when requested."
+        "NSLocationWhenInUseUsageDescription": "MansaMart Rider uses your foreground location while you are online or completing an active delivery.",
+        "NSCameraUsageDescription": "MansaMart Rider uses the camera for rider identity documents and delivery QR verification.",
+        "NSPhotoLibraryUsageDescription": "MansaMart Rider needs photo access for your profile, vehicle, licence, and identity documents."
       }
     },
     "android": {
@@ -48,17 +46,13 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
-      [
-        "expo-location",
-        {
-          "locationAlwaysAndWhenInUsePermission": "Allow MansaMart to use your location during active deliveries."
-        }
-      ],
+      "expo-secure-store",
+      "expo-location",
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow MansaMart to access photos for uploads.",
-          "cameraPermission": "Allow MansaMart to use the camera for uploads and QR checks."
+          "photosPermission": "Allow MansaMart Rider to access photos for rider verification documents.",
+          "cameraPermission": "Allow MansaMart Rider to capture verification documents."
         }
       ]
     ],

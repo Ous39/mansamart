@@ -24,7 +24,7 @@ export function RoleGate({ allowed, children }: RoleGateProps) {
     if (!isAllowed) {
       router.replace(getHomeRouteForRole(user.role) as any);
     }
-  }, [isLoading, user?.role, isAllowed]);
+  }, [isLoading, user, isAllowed, allowed]);
 
   if (isLoading) {
     return <View style={styles.center}><ActivityIndicator color={Colors.primary} /></View>;

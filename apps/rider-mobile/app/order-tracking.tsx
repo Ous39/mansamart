@@ -33,15 +33,16 @@ function fmtDate(value?: string) {
 export default function OrderTrackingScreen() {
   const insets = useSafeAreaInsets();
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
-  const { data: orders = [], isLoading, refetch } = useQuery<any[]>({ queryKey: ["/api/orders"], refetchInterval: 10000 });
+  const { data, isLoading, refetch } = useQuery<any>({ queryKey: ["/api/rider/dashboard"], refetchInterval: 10000 });
+  const deliveries = data?.history ?? [];
 
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: topPad + 14 }]}>
-        <Pressable onPress={() => safeBack("/(tabs)")} hitSlop={8} style={styles.backBtn}>
+        <Pressable onPress={() => safeBack("/(rider)")} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>Track Orders</Text>
+        <Text style={styles.headerTitle}>Delivery History</Text>
         <Pressable onPress={() => refetch()} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="refresh-outline" size={20} color={Colors.text} />
         </Pressable>
@@ -54,28 +55,28 @@ export default function OrderTrackingScreen() {
         </View>
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 24, gap: 14 }}>
-          {orders.length === 0 ? (
+          {deliveries.length === 0 ? (
             <View style={styles.emptyCard}>
               <Ionicons name="bag-check-outline" size={56} color={Colors.primary} />
-              <Text style={styles.emptyTitle}>No active orders yet</Text>
-              <Text style={styles.muted}>When you place or manage orders, live tracking will appear here.</Text>
+              <Text style={styles.emptyTitle}>No deliveries yet</Text>
+              <Text style={styles.muted}>Accepted and completed rider jobs will appear here.</Text>
             </View>
-          ) : orders.map((order: any) => {
-            const color = STATUS_COLORS[order.status] || Colors.primary;
+          ) : deliveries.map((delivery: any) => {
+            const color = STATUS_COLORS[delivery.status] || Colors.primary;
             return (
-              <Pressable key={order.id} style={styles.orderCard} onPress={() => router.push(`/order/${order.id}` as any)}>
+              <Pressable key={delivery.id} style={styles.orderCard} onPress={() => router.push(`/order/${delivery.orderId}` as any)}>
                 <View style={styles.orderRow}>
                   <View style={styles.orderIcon}><Ionicons name="receipt-outline" size={20} color={Colors.primary} /></View>
                   <View style={styles.orderBody}>
-                    <Text style={styles.orderProduct}>Order #{String(order.id).slice(-8).toUpperCase()}</Text>
-                    <Text style={styles.orderVendor}>{fmtDate(order.createdAt)} • {order.fulfillmentType === "pickup" ? "Pickup" : "Delivery"}</Text>
+                    <Text style={styles.orderProduct}>Order #{String(delivery.orderId).slice(0, 8).toUpperCase()}</Text>
+                    <Text style={styles.orderVendor}>{fmtDate(delivery.createdAt)} • Rider delivery</Text>
                   </View>
-                  <Text style={styles.orderTotal}>{fmtPrice(order.total)}</Text>
+                  <Text style={styles.orderTotal}>{fmtPrice(delivery.deliveryFee)}</Text>
                 </View>
                 <View style={styles.divider} />
                 <View style={styles.statusRow}>
                   <View style={[styles.statusPill, { backgroundColor: color + "20" }]}>
-                    <Text style={[styles.statusText, { color }]}>{String(order.status || "pending").replace(/_/g, " ")}</Text>
+                    <Text style={[styles.statusText, { color }]}>{String(delivery.status || "pending").replace(/_/g, " ")}</Text>
                   </View>
                   <View style={styles.openRow}><Text style={styles.openText}>Open tracking</Text><Ionicons name="chevron-forward" size={16} color={Colors.primary} /></View>
                 </View>

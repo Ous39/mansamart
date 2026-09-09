@@ -1,11 +1,11 @@
-const primary = "#0EA47A";
-const primaryLight = "#E6FAF3";
+const primary = "#2563EB";
+const primaryLight = "#EFF6FF";
 const deal = "#E63946";
 
 export default {
   primary,
   primaryLight,
-  primaryDark: "#0B8A65",
+  primaryDark: "#1D4ED8",
   deal,
   dealLight: "#FDECEE",
   background: "#F5F5F5",

@@ -16,7 +16,7 @@ async function apiCall(path: string, method = "PUT") {
   const token = getToken();
   const r = await fetch(new URL(path, getApiUrl()).toString(), {
     method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, "X-MansaMart-App": "rider" },
   });
   if (!r.ok) throw new Error("Failed");
   return r.json();
@@ -28,6 +28,12 @@ function timeAgo(d: string) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function notificationRoute(value?: string) {
+  if (!value) return null;
+  const allowed = ["/(rider)", "/order/", "/order-tracking", "/wallet", "/support"];
+  return allowed.some(prefix => value === prefix || value.startsWith(prefix)) ? value : null;
 }
 
 const TYPE_META: Record<string, { icon: string; color: string; bg: string }> = {
@@ -143,7 +149,7 @@ export default function NotificationsScreen() {
           </View>
           <Text style={styles.emptyTitle}>No notifications yet</Text>
           <Text style={styles.emptySubtext}>
-            Order updates, booking confirmations, and promotions will appear here
+            Delivery offers, verification updates, support replies, and payout alerts will appear here
           </Text>
         </View>
       ) : (
@@ -156,7 +162,11 @@ export default function NotificationsScreen() {
           renderItem={({ item }) => (
             <NotifCard
               item={item}
-              onPress={() => { if (!item.isRead) markRead.mutate(item.id); }}
+              onPress={() => {
+                if (!item.isRead) markRead.mutate(item.id);
+                const destination = notificationRoute(item.actionRoute || item.action_route);
+                if (destination) router.push(destination as any);
+              }}
             />
           )}
         />

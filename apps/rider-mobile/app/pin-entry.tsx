@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import {
-  View, Text, StyleSheet, TouchableOpacity, Alert
+  View, Text, StyleSheet, TouchableOpacity
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,8 +9,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getDefaultRouteForRole } from "@/lib/role-routes";
 
 const COLORS = {
-  primary: "#0EA47A",
-  primaryLight: "#E6FAF3",
+  primary: "#2563EB",
+  primaryLight: "#EFF6FF",
   bg: "#F7F8FA",
   text: "#1A1A2E",
   muted: "#6B7280",

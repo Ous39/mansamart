@@ -10,15 +10,15 @@ import Colors from "@/constants/colors";
 import { safeBack } from "@/lib/navigation";
 
 const STATUS_STEPS = [
-  { key: "pending", label: "Order Placed", icon: "checkmark-circle", desc: "We've received your order" },
-  { key: "paid", label: "Payment Held", icon: "wallet-outline", desc: "Funds are held securely in escrow" },
-  { key: "confirmed", label: "Confirmed", icon: "checkmark-done", desc: "Vendor confirmed your order" },
-  { key: "ready_for_pickup", label: "Ready", icon: "cube-outline", desc: "Order is ready for pickup/delivery" },
-  { key: "rider_assigned", label: "Rider Assigned", icon: "bicycle-outline", desc: "A rider has accepted the delivery" },
-  { key: "picked_up", label: "Picked Up", icon: "archive-outline", desc: "QR handover confirmed" },
-  { key: "on_the_way", label: "On The Way", icon: "navigate-outline", desc: "Rider is on the way" },
-  { key: "delivered", label: "Delivered", icon: "home-outline", desc: "Delivery verified" },
-  { key: "completed", label: "Completed", icon: "shield-checkmark", desc: "Payment released" },
+  { key: "pending", label: "Order placed", icon: "checkmark-circle", desc: "Customer created the order" },
+  { key: "paid", label: "Payment held", icon: "wallet-outline", desc: "Payment is held for verified fulfilment" },
+  { key: "confirmed", label: "Seller confirmed", icon: "checkmark-done", desc: "The seller accepted the order" },
+  { key: "ready_for_pickup", label: "Ready for pickup", icon: "cube-outline", desc: "The package is ready for the rider" },
+  { key: "rider_assigned", label: "Job accepted", icon: "bicycle-outline", desc: "This delivery is assigned to you" },
+  { key: "picked_up", label: "Pickup verified", icon: "archive-outline", desc: "Seller QR handover was confirmed" },
+  { key: "on_the_way", label: "On the way", icon: "navigate-outline", desc: "Travel to the customer address" },
+  { key: "delivered", label: "Delivery verified", icon: "home-outline", desc: "Customer QR handover was confirmed" },
+  { key: "completed", label: "Payment released", icon: "shield-checkmark", desc: "Delivery earning was released" },
 ];
 
 const STATUS_ORDER = ["pending", "paid", "confirmed", "processing", "preparing", "ready_for_pickup", "searching_rider", "rider_assigned", "picked_up", "on_the_way", "shipped", "delivered", "completed"];
@@ -71,7 +71,7 @@ export default function OrderDetailScreen() {
         <Stack.Screen options={{ headerShown: false }} />
         <Ionicons name="alert-circle-outline" size={60} color="#E63946" />
         <Text style={styles.errTitle}>Order not found</Text>
-        <Pressable onPress={() => safeBack("/order-tracking")} style={styles.backBtn}>
+        <Pressable onPress={() => safeBack("/(rider)/deliveries")} style={styles.backBtn}>
           <Text style={styles.backBtnText}>Go Back</Text>
         </Pressable>
       </View>
@@ -92,7 +92,7 @@ export default function OrderDetailScreen() {
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: topPad + 10 }]}>
-        <Pressable onPress={() => safeBack("/order-tracking")} style={styles.backPress}>
+        <Pressable onPress={() => safeBack("/(rider)/deliveries")} style={styles.backPress}>
           <Ionicons name="arrow-back" size={24} color="#1A1A2E" />
         </Pressable>
         <Text style={styles.headerTitle}>Order #{order.id.slice(-8).toUpperCase()}</Text>
@@ -149,20 +149,10 @@ export default function OrderDetailScreen() {
           </View>
         )}
 
-        {order.qrCode && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Order QR Verification</Text>
-            <View style={styles.qrBox}>
-              <Ionicons name="qr-code-outline" size={44} color={Colors.primary} />
-              <Text style={styles.qrText}>{order.qrCode}</Text>
-            </View>
-            <Text style={styles.stepDesc}>Vendor, rider, or shopper can scan/enter this code to confirm pickup or delivery.</Text>
-            <Pressable style={[styles.actionBtn, { marginTop: 12 }]} onPress={() => router.push("/scan-order")}>
-              <Ionicons name="scan-outline" size={18} color={Colors.primary} />
-              <Text style={styles.actionBtnText}>Open Scan Order</Text>
-            </Pressable>
-          </View>
-        )}
+        <View style={styles.securityCard}>
+          <Ionicons name="shield-checkmark-outline" size={22} color={Colors.primary} />
+          <View style={{ flex: 1 }}><Text style={styles.securityTitle}>Handover codes stay private</Text><Text style={styles.stepDesc}>The seller provides the pickup code. The customer provides the delivery code only after receiving the package.</Text></View>
+        </View>
 
         {tracking?.events?.length > 0 && (
           <View style={styles.card}>
@@ -219,7 +209,7 @@ export default function OrderDetailScreen() {
 
         {tracking?.delivery && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Map & Navigation</Text>
+            <Text style={styles.cardTitle}>Route and navigation</Text>
             <View style={styles.infoRow}>
               <Ionicons name="storefront-outline" size={16} color="#666" />
               <Text style={styles.infoText}>Pickup: {tracking.delivery.pickupAddress || "Vendor location"}</Text>
@@ -231,11 +221,11 @@ export default function OrderDetailScreen() {
             <View style={styles.mapActions}>
               <Pressable style={styles.mapBtn} onPress={() => openMap(tracking.delivery.pickupLatitude, tracking.delivery.pickupLongitude, tracking.delivery.pickupAddress)}>
                 <Ionicons name="navigate-outline" size={16} color={Colors.primary} />
-                <Text style={styles.mapText}>Vendor Map</Text>
+                <Text style={styles.mapText}>Pickup map</Text>
               </Pressable>
               <Pressable style={styles.mapBtn} onPress={() => openMap(tracking.delivery.dropoffLatitude, tracking.delivery.dropoffLongitude, tracking.delivery.dropoffAddress || `${order.address}, ${order.city}`)}>
                 <Ionicons name="location-outline" size={16} color={Colors.primary} />
-                <Text style={styles.mapText}>Shopper Map</Text>
+                <Text style={styles.mapText}>Drop-off map</Text>
               </Pressable>
             </View>
           </View>
@@ -243,7 +233,7 @@ export default function OrderDetailScreen() {
 
         {/* Delivery Info */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Delivery Details</Text>
+          <Text style={styles.cardTitle}>Customer delivery details</Text>
           <View style={styles.infoRow}>
             <Ionicons name="location-outline" size={16} color="#666" />
             <Text style={styles.infoText}>{order.address}, {order.city}</Text>
@@ -268,15 +258,18 @@ export default function OrderDetailScreen() {
           </View>
         </View>
 
-        {/* Actions */}
         <View style={styles.card}>
-          <Pressable style={styles.actionBtn} onPress={() => router.push("/")}>
-            <Ionicons name="bag-outline" size={18} color={Colors.primary} />
-            <Text style={styles.actionBtnText}>Continue Shopping</Text>
+          {["rider_assigned", "picked_up", "on_the_way"].includes(order.status) && <Pressable style={styles.primaryAction} onPress={() => router.push({ pathname: "/scan-order", params: { orderId: order.id, stage: order.status === "rider_assigned" ? "pickup" : "delivery" } } as any)}>
+            <Ionicons name="scan-outline" size={18} color="#fff" />
+            <Text style={styles.primaryActionText}>{order.status === "rider_assigned" ? "Verify seller pickup" : "Verify customer delivery"}</Text>
+          </Pressable>}
+          <Pressable style={[styles.actionBtn, { marginTop: 8 }]} onPress={() => router.push("/(rider)/deliveries" as any)}>
+            <Ionicons name="bicycle-outline" size={18} color={Colors.primary} />
+            <Text style={styles.actionBtnText}>Back to deliveries</Text>
           </Pressable>
-          <Pressable style={[styles.actionBtn, { marginTop: 8 }]} onPress={() => router.push("/(tabs)/wishlist" as any)}>
+          <Pressable style={[styles.actionBtn, { marginTop: 8 }]} onPress={() => router.push({ pathname: "/support", params: { orderId: order.id } } as any)}>
             <Ionicons name="chatbubble-outline" size={18} color="#666" />
-            <Text style={[styles.actionBtnText, { color: "#666" }]}>Contact Support</Text>
+            <Text style={[styles.actionBtnText, { color: "#666" }]}>Report a delivery issue</Text>
           </Pressable>
         </View>
 
@@ -303,6 +296,8 @@ const styles = StyleSheet.create({
     shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
   },
   cardTitle: { fontSize: 15, fontWeight: "700", color: "#1A1A2E", marginBottom: 12 },
+  securityCard: { backgroundColor: "#EFF6FF", borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "flex-start", gap: 11, borderWidth: 1, borderColor: "#BFDBFE" },
+  securityTitle: { fontSize: 14, fontWeight: "700", color: "#1E3A8A", marginBottom: 3 },
   trackingCode: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12, backgroundColor: "#F7F8FA", borderRadius: 8, padding: 8 },
   trackingText: { fontSize: 12, color: "#666", fontWeight: "600" },
   timeline: { gap: 0 },
@@ -342,6 +337,8 @@ const styles = StyleSheet.create({
   backBtnText: { color: "#fff", fontWeight: "700" },
   actionBtn: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#F7F8FA", borderRadius: 12, padding: 14 },
   actionBtnText: { fontSize: 14, fontWeight: "600", color: Colors.primary },
+  primaryAction: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, backgroundColor: Colors.primary, borderRadius: 12, padding: 14 },
+  primaryActionText: { color: "#fff", fontSize: 14, fontWeight: "700" },
   mapActions: { flexDirection: "row", gap: 10, marginTop: 12 },
   mapBtn: { flex: 1, flexDirection: "row", gap: 6, justifyContent: "center", alignItems: "center", backgroundColor: Colors.primaryLight, borderRadius: 12, padding: 12 },
   mapText: { color: Colors.primary, fontWeight: "700", fontSize: 13 },

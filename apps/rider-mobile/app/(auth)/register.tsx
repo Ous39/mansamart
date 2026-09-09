@@ -11,22 +11,16 @@ import { requestCurrentLocation } from "@/lib/location";
 import { safeBack } from "@/lib/navigation";
 
 const C = {
-  primary: "#2F5D59", primaryLight: "#E8F1EF",
-  vendor: "#2F5D59", vendorLight: "#E8F1EF",
+  primary: "#2563EB", primaryLight: "#EFF6FF",
+  vendor: "#2563EB", vendorLight: "#EFF6FF",
   provider: "#D8843B", providerLight: "#FFF1E5",
-  bg: "#F4FAF9", text: "#1F2A2A", muted: "#53605F",
-  border: "#DDE8E6", white: "#FFFFFF", red: "#D44B4B",
+  bg: "#F5F7FB", text: "#172033", muted: "#64748B",
+  border: "#E2E8F0", white: "#FFFFFF", red: "#D44B4B",
   inputBg: "#FFFFFF",
 };
 
-const ROLES = [
-  { id: "delivery_rider" as UserRole, title: "Rider", subtitle: "Accept delivery jobs and earn from completed orders", icon: "bicycle-outline", color: "#2563EB", bg: "#EFF6FF" },
-];
-
 const GAMBIA_REGIONS = ["Banjul", "Kanifing", "Brikama", "Mansakonko", "Kerewan", "Kuntaur", "Janjanbureh"];
 const GENDERS = ["Male", "Female", "Prefer not to say"];
-const BUSINESS_TYPES = ["Groceries", "Fashion", "Electronics", "Furniture & Home", "Beauty", "Food", "Auto Parts", "Books", "Other"];
-const SERVICE_TYPES = ["Cleaning", "Plumbing", "Electrical", "Painting", "Gardening", "Interior Design", "Security", "IT Support", "Catering", "Education", "Photography", "Other"];
 const VEHICLE_TYPES = ["Motorbike", "Car", "Van", "Bicycle", "Tricycle", "Other"];
 
 function PickerRow({ label, options, value, onSelect }: { label: string; options: string[]; value: string; onSelect: (v: string) => void }) {
@@ -78,8 +72,7 @@ export default function RegisterScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Step 1
-  const [role, setRole] = useState<UserRole>("delivery_rider");
+  const role: UserRole = "delivery_rider";
 
   // Step 2 – Personal
   const [name, setName] = useState("");
@@ -98,27 +91,24 @@ export default function RegisterScreen() {
   const [isLocating, setIsLocating] = useState(false);
 
   // Step 3 – Role-specific
-  const [businessName, setBusinessName] = useState("");
   const [businessType, setBusinessType] = useState("");
   const [bio, setBio] = useState("");
   const [area, setArea] = useState("");
 
-  const totalSteps = role === "user" ? 2 : 3;
+  const totalSteps = 2;
 
   const handleNext = () => {
     setError("");
-    if (step === 1) { setStep(2); return; }
-    if (step === 2) {
+    if (step === 1) {
       if (!name.trim()) { setError("Full name is required"); return; }
       if (!email.trim() || !email.includes("@")) { setError("Valid email is required"); return; }
       if (!phone.trim()) { setError("Phone number is required"); return; }
       if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
       if (password !== confirmPassword) { setError("Passwords do not match"); return; }
       if (!city) { setError("Please select your city"); return; }
-      if (role === "user") { handleSubmit(); return; }
-      setStep(3); return;
+      setStep(2); return;
     }
-    if (step === 3) { handleSubmit(); }
+    if (step === 2) { handleSubmit(); }
   };
 
   const handleUseCurrentLocation = async () => {
@@ -145,8 +135,7 @@ export default function RegisterScreen() {
 
   const handleSubmit = async () => {
     setError("");
-    if (role === "vendor" && !businessName.trim()) { setError("Business name is required"); return; }
-    if (role === "delivery_rider" && !businessType) { setError("Please select your vehicle type"); return; }
+    if (!businessType) { setError("Please select your vehicle type"); return; }
 
     setIsLoading(true);
     try {
@@ -165,7 +154,6 @@ export default function RegisterScreen() {
         gender: gender || undefined,
         dateOfBirth: dob.trim() || undefined,
         role,
-        businessName: businessName.trim() || undefined,
         businessType: businessType || undefined,
         bio: bio.trim() || undefined,
       };
@@ -187,7 +175,7 @@ export default function RegisterScreen() {
         <TouchableOpacity onPress={() => step === 1 ? safeBack("/") : setStep(s => s - 1)} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={C.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Create Account</Text>
+        <Text style={styles.headerTitle}>Rider Application</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -201,35 +189,10 @@ export default function RegisterScreen() {
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
-        {/* STEP 1: Role */}
         {step === 1 && (
           <View>
-            <Text style={styles.stepTitle}>How will you use MansaMart?</Text>
-            <Text style={styles.stepSub}>Choose your account type to get started</Text>
-            {ROLES.map(r => (
-              <TouchableOpacity
-                key={r.id}
-                style={[styles.roleCard, role === r.id && { borderColor: r.color, borderWidth: 2 }]}
-                onPress={() => setRole(r.id)}
-              >
-                <View style={[styles.roleIconBox, { backgroundColor: r.bg }]}>
-                  <Ionicons name={r.icon as any} size={26} color={r.color} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.roleTitle, role === r.id && { color: r.color }]}>{r.title}</Text>
-                  <Text style={styles.roleSub}>{r.subtitle}</Text>
-                </View>
-                <Ionicons name={role === r.id ? "radio-button-on" : "radio-button-off"} size={22} color={role === r.id ? r.color : C.border} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* STEP 2: Personal Info */}
-        {step === 2 && (
-          <View>
-            <Text style={styles.stepTitle}>Personal Information</Text>
-            <Text style={styles.stepSub}>Tell us about yourself</Text>
+            <Text style={styles.stepTitle}>Your rider account</Text>
+            <Text style={styles.stepSub}>Enter the identity and contact details operations will verify</Text>
             <Field label="Full Name" value={name} onChange={setName} placeholder="Enter your full name" />
             <Field label="Email Address" value={email} onChange={setEmail} placeholder="you@example.com" keyboardType="email-address" />
             <Field label="Phone Number" value={phone} onChange={setPhone} placeholder="+220 XXX XXXX" keyboardType="phone-pad" />
@@ -247,31 +210,10 @@ export default function RegisterScreen() {
           </View>
         )}
 
-        {/* STEP 3: Role-specific */}
-        {step === 3 && role === "vendor" && (
+        {step === 2 && (
           <View>
-            <Text style={styles.stepTitle}>Business Details</Text>
-            <Text style={styles.stepSub}>Tell customers about your business</Text>
-            <Field label="Business Name" value={businessName} onChange={setBusinessName} placeholder="Your shop or brand name" />
-            <PickerRow label="Business Category" options={BUSINESS_TYPES} value={businessType} onSelect={setBusinessType} />
-            <Field label="Business Description" value={bio} onChange={setBio} placeholder="What do you sell? What makes you unique?" multiline optional />
-          </View>
-        )}
-
-        {step === 3 && role === "service_provider" && (
-          <View>
-            <Text style={styles.stepTitle}>Service Details</Text>
-            <Text style={styles.stepSub}>Tell clients what you offer</Text>
-            <Field label="Business / Brand Name" value={businessName} onChange={setBusinessName} placeholder="Your name or business name" optional />
-            <PickerRow label="Service Category" options={SERVICE_TYPES} value={businessType} onSelect={setBusinessType} />
-            <Field label="About Your Service" value={bio} onChange={setBio} placeholder="Describe your expertise and experience..." multiline optional />
-          </View>
-        )}
-
-        {step === 3 && role === "delivery_rider" && (
-          <View>
-            <Text style={styles.stepTitle}>Rider Details</Text>
-            <Text style={styles.stepSub}>Tell us how you will deliver orders</Text>
+            <Text style={styles.stepTitle}>Delivery setup</Text>
+            <Text style={styles.stepSub}>Tell operations how and where you plan to deliver</Text>
             <PickerRow label="Vehicle Type" options={VEHICLE_TYPES} value={businessType} onSelect={setBusinessType} />
             <Field label="Main Delivery Area" value={area} onChange={setArea} placeholder="Example: Senegambia, Brusubi, Banjul" optional />
             <Field label="Short Bio" value={bio} onChange={setBio} placeholder="Your delivery experience or availability" multiline optional />
@@ -286,13 +228,13 @@ export default function RegisterScreen() {
         ) : null}
 
         <Pressable
-          style={({ pressed }) => [styles.btn, { opacity: pressed || isLoading ? 0.85 : 1, backgroundColor: ROLES.find(r => r.id === role)?.color ?? C.primary }]}
+          style={({ pressed }) => [styles.btn, { opacity: pressed || isLoading ? 0.85 : 1, backgroundColor: C.primary }]}
           onPress={handleNext}
           disabled={isLoading}
         >
           {isLoading
             ? <ActivityIndicator color="#FFF" />
-            : <Text style={styles.btnText}>{step === totalSteps ? "Create Account" : "Continue"}</Text>
+            : <Text style={styles.btnText}>{step === totalSteps ? "Submit Rider Application" : "Continue"}</Text>
           }
         </Pressable>
 

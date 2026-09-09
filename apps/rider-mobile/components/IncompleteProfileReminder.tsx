@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from "react";
-import { Alert, Platform } from "react-native";
+import { useEffect, useRef } from "react";
+import { Alert } from "react-native";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
@@ -27,13 +27,8 @@ export function IncompleteProfileReminder() {
     lastShownRef.current = Date.now();
     const missing = Array.isArray(data.missingItems) ? data.missingItems.slice(0, 5).join(", ") : "profile details";
     const openProfile = () => router.push(getProfileRouteForRole(user.role) as any);
-    if (Platform.OS === "web") {
-      // Alert works on web too, but this keeps the logic simple and consistent.
-      Alert.alert("Complete your MansaMart profile", `Missing: ${missing}. Some features stay restricted until your profile is completed and approved.`, [{ text: "Later" }, { text: "Complete now", onPress: openProfile }]);
-    } else {
-      Alert.alert("Complete your MansaMart profile", `Missing: ${missing}. Some features stay restricted until your profile is completed and approved.`, [{ text: "Later" }, { text: "Complete now", onPress: openProfile }]);
-    }
-  }, [user?.id, user?.role, user?.createdAt, data?.restricted, JSON.stringify(data?.missingItems || [])]);
+    Alert.alert("Complete your MansaMart profile", `Missing: ${missing}. Some features stay restricted until your profile is completed and approved.`, [{ text: "Later" }, { text: "Complete now", onPress: openProfile }]);
+  }, [user, isSellerRole, data]);
 
   return null;
 }

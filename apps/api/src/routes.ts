@@ -30,6 +30,15 @@ import {
   deriveMarketplaceOrderStatus,
   isBusinessVerified,
 } from "./business-rules";
+import {
+  canChangeDeliveryStatus,
+  canReleaseDeliveryPayment,
+  canRiderAccessDelivery,
+  canVerifyOrderQr,
+  isActiveDeliveryStatus,
+  isDeliveryOfferAcceptable,
+  resolveRiderPresence,
+} from "./rider-rules";
 
 type RealtimePayload = Record<string, any>;
 type RealtimeEmitter = (event: string, payload: RealtimePayload, rooms?: string[]) => void;
@@ -94,6 +103,12 @@ function safeSocketUser(user: any) {
 
 function safeUser(u: typeof users.$inferSelect) {
   const { password, pin, ...safe } = u;
+  return safe;
+}
+
+function safeRiderProfile(profile: typeof deliveryRiders.$inferSelect) {
+  const safe = { ...profile } as Record<string, unknown>;
+  delete safe.internalNotes;
   return safe;
 }
 
@@ -630,8 +645,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await db.insert(notifications).values({
         userId: user.id,
         type: "system",
-        title: "Welcome to MansaMart!",
-        body: "Discover thousands of products and book home services from Gambian businesses.",
+        title: data.role === "delivery_rider" ? "Welcome to MansaMart Rider" : "Welcome to MansaMart!",
+        body: data.role === "delivery_rider" ? "Complete your rider profile and documents so operations can review your application." : "Discover thousands of products and book home services from Gambian businesses.",
         icon: "information-circle-outline",
         color: "#0EA47A",
       });
@@ -2595,6 +2610,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  app.get("/api/rider/finance", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const [wallet, profile] = await Promise.all([
+      getOrCreateWallet(user.id),
+      ensureRiderProfile(user),
+    ]);
+    const [recentTransactions, recentSettlements, recentPayouts, recentEarnings] = await Promise.all([
+      db.select().from(transactions).where(eq(transactions.userId, user.id)).orderBy(desc(transactions.createdAt)).limit(50),
+      db.select().from(settlements).where(eq(settlements.beneficiaryId, user.id)).orderBy(desc(settlements.createdAt)).limit(50),
+      db.select().from(payouts).where(eq(payouts.userId, user.id)).orderBy(desc(payouts.createdAt)).limit(50),
+      db.select().from(riderEarnings).where(eq(riderEarnings.riderId, user.id)).orderBy(desc(riderEarnings.createdAt)).limit(50),
+    ]);
+    const pendingAmounts = recentPayouts.filter((payout) => payout.status === "pending").map((payout) => payout.amount);
+    const payoutMethod = String(profile.payoutMethod || "").toLowerCase().includes("bank") ? "bank_transfer" : profile.mobileMoneyNumber ? "mobile_money" : profile.accountNumber ? "bank_transfer" : "";
+    return res.json({
+      wallet,
+      transactions: recentTransactions,
+      settlements: recentSettlements,
+      payouts: recentPayouts,
+      earnings: recentEarnings,
+      summary: {
+        availableForPayout: availablePayoutBalance(wallet.balance, pendingAmounts),
+        pendingPayout: pendingAmounts.reduce((sum, amount) => sum + amount, 0),
+        totalEarned: recentEarnings.filter((earning) => earning.status === "completed").reduce((sum, earning) => sum + earning.amount, 0),
+        totalPaidOut: recentPayouts.filter((payout) => payout.status === "completed").reduce((sum, payout) => sum + payout.amount, 0),
+      },
+      payoutProfile: {
+        verificationStatus: profile.verificationStatus,
+        method: payoutMethod,
+        accountName: profile.accountName || profile.displayName || user.name,
+        accountNumber: payoutMethod === "bank_transfer" ? profile.accountNumber || "" : profile.mobileMoneyNumber || "",
+        provider: payoutMethod === "bank_transfer" ? profile.bankName || "" : profile.mobileMoneyProvider || "",
+      },
+    });
+  });
+
   app.post("/api/wallet/deposit/manual", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
@@ -2666,6 +2717,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (user.role === "service_provider") {
         const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
         if (!isBusinessVerified(profile)) return res.status(403).json({ message: "Your provider profile must be verified before requesting a payout." });
+      } else if (user.role === "delivery_rider") {
+        const [profile] = await db.select().from(deliveryRiders).where(eq(deliveryRiders.userId, user.id)).limit(1);
+        if (profile?.verificationStatus !== "verified") return res.status(403).json({ message: "Your rider profile must be verified before requesting a payout." });
       }
       const payout = await db.transaction(async (tx) => {
         await tx.execute(sql`SELECT id FROM wallets WHERE user_id = ${user.id} FOR UPDATE`);
@@ -2792,7 +2846,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     bankName: z.string().optional(),
     accountName: z.string().optional(),
     accountNumber: z.string().optional(),
-    internalNotes: z.string().optional(),
     latitude: z.number().optional(),
     longitude: z.number().optional(),
     documents: z.array(riderDocumentSchema).optional(),
@@ -2822,11 +2875,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return created;
   }
 
-  app.get("/api/rider/me/profile", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/rider/me/profile", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user as typeof users.$inferSelect;
     const profile = await ensureRiderProfile(user);
     const completion = await computeProfileCompletion(user);
-    return res.json({ ...profile, user: safeUser(user), completion });
+    return res.json({ ...safeRiderProfile(profile), user: safeUser(user), completion });
   });
 
   app.put("/api/rider/profile", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
@@ -2848,7 +2901,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         updatedAt: new Date(),
       }).where(eq(users.id, user.id)).catch(() => {});
       const completion = await computeProfileCompletion({ ...user, avatar: data.profilePhoto || user.avatar, phone: data.phone || user.phone, address: data.currentAddress || user.address });
-      return res.json({ ...profile, completion });
+      return res.json({ ...safeRiderProfile(profile), completion });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
       console.error(err);
@@ -2868,7 +2921,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [profile] = await db.update(deliveryRiders).set({ ...data, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id)).returning();
       if (data.profilePhoto) await db.update(users).set({ avatar: data.profilePhoto, updatedAt: new Date() }).where(eq(users.id, user.id)).catch(() => {});
       const completion = await computeProfileCompletion(user);
-      return res.json({ ...profile, completion });
+      return res.json({ ...safeRiderProfile(profile), completion });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
       console.error(err);
@@ -2876,35 +2929,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/rider/apply", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/rider/apply", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const data = z.object({ vehicleType: z.string().default("motorbike"), vehiclePlate: z.string().optional(), licenseNumber: z.string().optional(), documents: z.array(z.object({ type: z.string(), url: z.string(), name: z.string() })).optional() }).parse(req.body);
       const [existing] = await db.select().from(deliveryRiders).where(eq(deliveryRiders.userId, user.id)).limit(1);
-      if (existing) return res.json(existing);
+      if (existing) return res.json(safeRiderProfile(existing));
       const [profile] = await db.insert(deliveryRiders).values({ ...data, userId: user.id }).returning();
-      await db.update(users).set({ role: "delivery_rider", verificationStatus: "pending" }).where(eq(users.id, user.id));
-      return res.status(201).json(profile);
+      return res.status(201).json(safeRiderProfile(profile));
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
       return res.status(500).json({ message: "Server error" });
     }
   });
 
-  app.get("/api/rider/me", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/rider/me", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const profile = await ensureRiderProfile(user);
     const activeDeliveries = await db.select().from(deliveries).where(eq(deliveries.riderId, user.id)).orderBy(desc(deliveries.createdAt)).limit(20);
     const offers = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered"))).orderBy(desc(deliveryRequests.createdAt)).limit(20);
     const completion = await computeProfileCompletion(user);
-    return res.json({ profile, activeDeliveries, offers, completion });
+    return res.json({ profile: safeRiderProfile(profile), activeDeliveries, offers, completion });
   });
 
   app.put("/api/rider/status", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
-    const user = (req as any).user;
-    const { isOnline, isAvailable, latitude, longitude } = z.object({ isOnline: z.boolean().optional(), isAvailable: z.boolean().optional(), latitude: z.number().optional(), longitude: z.number().optional() }).parse(req.body);
-    const [profile] = await db.update(deliveryRiders).set({ ...(isOnline != null ? { isOnline } : {}), ...(isAvailable != null ? { isAvailable } : {}), ...(latitude != null ? { latitude } : {}), ...(longitude != null ? { longitude } : {}), updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id)).returning();
-    return res.json(profile);
+    try {
+      const user = (req as any).user;
+      const requested = z.object({
+        isOnline: z.boolean().optional(),
+        isAvailable: z.boolean().optional(),
+        latitude: z.number().min(-90).max(90).optional(),
+        longitude: z.number().min(-180).max(180).optional(),
+      }).parse(req.body);
+      const current = await ensureRiderProfile(user);
+      const active = await db.select({ id: deliveries.id, status: deliveries.status })
+        .from(deliveries)
+        .where(eq(deliveries.riderId, user.id));
+      const resolved = resolveRiderPresence({
+        verificationStatus: current.verificationStatus,
+        currentOnline: current.isOnline,
+        requestedOnline: requested.isOnline,
+        requestedAvailable: requested.isAvailable,
+        hasActiveDelivery: active.some((delivery) => isActiveDeliveryStatus(delivery.status)),
+      });
+      if (!resolved.ok) return res.status(403).json({ message: resolved.message });
+      const [profile] = await db.update(deliveryRiders).set({
+        ...resolved.presence,
+        ...(requested.latitude != null ? { latitude: requested.latitude } : {}),
+        ...(requested.longitude != null ? { longitude: requested.longitude } : {}),
+        updatedAt: new Date(),
+      }).where(eq(deliveryRiders.userId, user.id)).returning();
+      return res.json(profile);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
+      return res.status(500).json({ message: "Rider status update failed" });
+    }
   });
 
   app.post("/api/delivery/dispatch", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
@@ -2929,7 +3008,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, pickupLatitude, pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
       for (const rider of nearest) {
         await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 60_000) });
-        await db.insert(notifications).values({ userId: rider.userId, type: "delivery", title: "New Delivery Request", body: `Pickup: ${pickupAddress}. Fee: D ${deliveryFee.toLocaleString()}`, icon: "bicycle-outline", color: "#E8813A", actionRoute: "/(rider)/" });
+        await db.insert(notifications).values({ userId: rider.userId, type: "delivery", title: "New Delivery Request", body: `Pickup: ${pickupAddress}. Fee: D ${safeDeliveryFee.toLocaleString()}`, icon: "bicycle-outline", color: "#E8813A", actionRoute: "/(rider)/deliveries" });
       }
       await db.update(orders).set({ status: "rider_searching" as any, updatedAt: new Date() }).where(eq(orders.id, orderId));
       return res.status(201).json({ delivery, offeredRiders: nearest.length });
@@ -2939,19 +3018,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/delivery/requests/:id/accept", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
+  async function acceptDeliveryRequest(req: Request, res: Response) {
     const user = (req as any).user;
-    const [request] = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.id, param(req, "id")), eq(deliveryRequests.riderId, user.id))).limit(1);
+    try {
+      const result = await db.transaction(async (tx) => {
+        const requestId = param(req, "id");
+        await tx.execute(sql`SELECT id FROM delivery_requests WHERE id = ${requestId} FOR UPDATE`);
+        await tx.execute(sql`SELECT user_id FROM delivery_riders WHERE user_id = ${user.id} FOR UPDATE`);
+        const [riderProfile] = await tx.select().from(deliveryRiders)
+          .where(eq(deliveryRiders.userId, user.id)).limit(1);
+        if (!riderProfile || riderProfile.verificationStatus !== "verified" || !riderProfile.isOnline || !riderProfile.isAvailable) {
+          throw new Error("RIDER_NOT_READY");
+        }
+        const [request] = await tx.select().from(deliveryRequests)
+          .where(and(eq(deliveryRequests.id, requestId), eq(deliveryRequests.riderId, user.id))).limit(1);
+        if (!request) throw new Error("OFFER_NOT_FOUND");
+        if (!isDeliveryOfferAcceptable(request)) {
+          if (request.status === "offered") await tx.update(deliveryRequests).set({ status: "expired", respondedAt: new Date() }).where(eq(deliveryRequests.id, request.id));
+          throw new Error("OFFER_EXPIRED");
+        }
+        const [activeForRider] = await tx.select({ id: deliveries.id }).from(deliveries)
+          .where(and(eq(deliveries.riderId, user.id), inArray(deliveries.status, ["assigned", "picked_up", "in_transit"]))).limit(1);
+        if (activeForRider) throw new Error("RIDER_BUSY");
+        await tx.execute(sql`SELECT id FROM deliveries WHERE id = ${request.deliveryId} FOR UPDATE`);
+        const [delivery] = await tx.select().from(deliveries).where(eq(deliveries.id, request.deliveryId)).limit(1);
+        if (!delivery || delivery.status !== "searching" || delivery.riderId) throw new Error("DELIVERY_ASSIGNED");
+        await tx.update(deliveryRequests).set({ status: "cancelled", respondedAt: new Date() })
+          .where(and(eq(deliveryRequests.deliveryId, delivery.id), eq(deliveryRequests.status, "offered")));
+        await tx.update(deliveryRequests).set({ status: "cancelled", respondedAt: new Date() })
+          .where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered")));
+        const [acceptedRequest] = await tx.update(deliveryRequests).set({ status: "accepted", respondedAt: new Date() }).where(eq(deliveryRequests.id, request.id)).returning();
+        const [updatedDelivery] = await tx.update(deliveries).set({ riderId: user.id, status: "assigned", acceptedAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id)).returning();
+        const [updatedOrder] = await tx.update(orders).set({ status: "rider_assigned" as any, riderId: user.id, updatedAt: new Date() }).where(eq(orders.id, delivery.orderId)).returning();
+        await tx.update(deliveryRiders).set({ isAvailable: false, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
+        return { request: acceptedRequest, delivery: updatedDelivery, order: updatedOrder };
+      });
+      await addTracking(result.delivery.orderId, "rider_assigned", "Rider assigned", `${user.name} accepted the delivery.`, user, { deliveryId: result.delivery.id });
+      await notifyOrderParties(result.order, "Rider Assigned", `${user.name} has accepted the delivery.`, "delivery");
+      return res.json(result);
+    } catch (err: any) {
+      if (err.message === "OFFER_NOT_FOUND") return res.status(404).json({ message: "Delivery offer not found" });
+      if (err.message === "OFFER_EXPIRED") return res.status(410).json({ message: "This delivery offer has expired or was already answered" });
+      if (err.message === "DELIVERY_ASSIGNED") return res.status(409).json({ message: "Another rider already accepted this delivery" });
+      if (err.message === "RIDER_BUSY") return res.status(409).json({ message: "Complete your active delivery before accepting another one" });
+      if (err.message === "RIDER_NOT_READY") return res.status(403).json({ message: "You must be verified, online, and available before accepting a delivery" });
+      console.error(err);
+      return res.status(500).json({ message: "Unable to accept delivery" });
+    }
+  }
+
+  app.post("/api/delivery/requests/:id/accept", requireAuth, requireRole("delivery_rider"), acceptDeliveryRequest);
+  app.post("/api/delivery-requests/:id/accept", requireAuth, requireRole("delivery_rider"), acceptDeliveryRequest);
+
+  async function declineDeliveryRequest(req: Request, res: Response) {
+    const user = (req as any).user;
+    const [request] = await db.select().from(deliveryRequests)
+      .where(and(eq(deliveryRequests.id, param(req, "id")), eq(deliveryRequests.riderId, user.id))).limit(1);
     if (!request || request.status !== "offered") return res.status(404).json({ message: "Delivery offer not available" });
-    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, request.deliveryId)).limit(1);
-    if (!delivery || delivery.status !== "searching") return res.status(400).json({ message: "Delivery already assigned" });
-    await db.update(deliveryRequests).set({ status: "cancelled" }).where(eq(deliveryRequests.deliveryId, delivery.id));
-    const [acceptedReq] = await db.update(deliveryRequests).set({ status: "accepted", respondedAt: new Date() }).where(eq(deliveryRequests.id, request.id)).returning();
-    const [updatedDelivery] = await db.update(deliveries).set({ riderId: user.id, status: "assigned", acceptedAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id)).returning();
-    await db.update(deliveryRiders).set({ isAvailable: false, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
-    await db.update(orders).set({ status: "rider_assigned" as any, updatedAt: new Date() }).where(eq(orders.id, delivery.orderId));
-    return res.json({ request: acceptedReq, delivery: updatedDelivery });
-  });
+    const [declined] = await db.update(deliveryRequests).set({ status: "cancelled", respondedAt: new Date() })
+      .where(and(eq(deliveryRequests.id, request.id), eq(deliveryRequests.status, "offered"))).returning();
+    if (!declined) return res.status(409).json({ message: "Delivery offer was already answered" });
+    return res.json({ request: declined });
+  }
+
+  app.post("/api/delivery/requests/:id/decline", requireAuth, requireRole("delivery_rider"), declineDeliveryRequest);
+  app.post("/api/delivery-requests/:id/decline", requireAuth, requireRole("delivery_rider"), declineDeliveryRequest);
 
   app.put("/api/delivery/:id/status", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
     const user = (req as any).user;
@@ -2959,14 +3090,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, param(req, "id"))).limit(1);
     if (!delivery) return res.status(404).json({ message: "Delivery not found" });
     if (user.role !== "admin" && delivery.riderId !== user.id) return res.status(403).json({ message: "Forbidden" });
-    const extra: any = { status, updatedAt: new Date() };
-    if (status === "picked_up") extra.pickedUpAt = new Date();
-    if (status === "delivered") extra.deliveredAt = new Date();
-    const [updated] = await db.update(deliveries).set(extra).where(eq(deliveries.id, delivery.id)).returning();
-    if (status === "delivered") {
-      await db.update(orders).set({ status: "delivered" as any, updatedAt: new Date() }).where(eq(orders.id, delivery.orderId));
-      if (delivery.riderId) await db.update(deliveryRiders).set({ isAvailable: true, completedDeliveries: sql`${deliveryRiders.completedDeliveries} + 1`, updatedAt: new Date() }).where(eq(deliveryRiders.userId, delivery.riderId));
+    if (!canChangeDeliveryStatus(user.role, delivery.status, status)) {
+      const message = ["picked_up", "delivered"].includes(status)
+        ? `${status === "picked_up" ? "Pickup" : "Delivery"} must be confirmed with the one-time QR code.`
+        : "That delivery status change is not allowed.";
+      return res.status(409).json({ message });
     }
+    const extra: any = { status, updatedAt: new Date() };
+    const [updated] = await db.update(deliveries).set(extra).where(eq(deliveries.id, delivery.id)).returning();
+    if (status === "in_transit") await db.update(orders).set({ status: "on_the_way" as any, updatedAt: new Date() }).where(eq(orders.id, delivery.orderId));
+    await addTracking(delivery.orderId, status, status === "in_transit" ? "Delivery on the way" : "Delivery issue reported", status === "in_transit" ? "The rider is travelling to the delivery address." : "The rider reported a delivery issue for support review.", user, { deliveryId: delivery.id });
     return res.json(updated);
   });
 
@@ -3131,7 +3264,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const qrs = await db.select().from(orderQrCodes).where(eq(orderQrCodes.orderId, orderId)).orderBy(desc(orderQrCodes.createdAt));
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
     const latestRiderLocation = delivery?.riderId ? await db.select().from(riderLocations).where(eq(riderLocations.riderId, delivery.riderId)).orderBy(desc(riderLocations.createdAt)).limit(1) : [];
-    return res.json({ order, events, qrs, delivery: delivery || null, riderLocation: latestRiderLocation[0] || null });
+    const visibleQrs = user.role === "admin"
+      ? qrs
+      : user.role === "user"
+        ? qrs.filter((qr) => qr.purpose === "delivery")
+        : user.role === "vendor"
+          ? qrs.filter((qr) => qr.purpose === "pickup")
+          : [];
+    const visibleOrder = (user.role === "user" || user.role === "admin") ? order : { ...order, qrCode: null };
+    return res.json({ order: visibleOrder, events, qrs: visibleQrs, delivery: delivery || null, riderLocation: latestRiderLocation[0] || null });
   });
 
   app.post("/api/orders/:id/confirm-payment", requireAuth, async (req: Request, res: Response) => {
@@ -3261,32 +3402,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/delivery-requests/:id/accept", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
-    const user = (req as any).user;
-    const [request] = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.id, param(req, "id")), eq(deliveryRequests.riderId, user.id))).limit(1);
-    if (!request || request.status !== "offered") return res.status(404).json({ message: "Delivery offer not available" });
-    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, request.deliveryId)).limit(1);
-    if (!delivery || delivery.status !== "searching") return res.status(400).json({ message: "Delivery already assigned" });
-    await db.update(deliveryRequests).set({ status: "cancelled" }).where(eq(deliveryRequests.deliveryId, delivery.id));
-    const [acceptedReq] = await db.update(deliveryRequests).set({ status: "accepted", respondedAt: new Date() }).where(eq(deliveryRequests.id, request.id)).returning();
-    const [updatedDelivery] = await db.update(deliveries).set({ riderId: user.id, status: "assigned", acceptedAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id)).returning();
-    const [updatedOrder] = await db.update(orders).set({ status: "rider_assigned" as any, riderId: user.id, updatedAt: new Date() }).where(eq(orders.id, delivery.orderId)).returning();
-    await db.update(deliveryRiders).set({ isAvailable: false, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
-    await addTracking(delivery.orderId, "rider_assigned", "Rider assigned", `${user.name} accepted the delivery.`, user, { deliveryId: delivery.id });
-    await notifyOrderParties(updatedOrder, "Rider Assigned", `${user.name} has accepted the delivery.`, "delivery");
-    return res.json({ request: acceptedReq, delivery: updatedDelivery, order: updatedOrder });
-  });
-
   app.post("/api/orders/:id/confirm-pickup-qr", requireAuth, requireRole("vendor", "delivery_rider", "admin"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const orderId = param(req, "id");
     const { code } = z.object({ code: z.string().min(6) }).parse(req.body);
+    const [orderBefore] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!orderBefore) return res.status(404).json({ message: "Order not found" });
+    const parties = await getOrderParties(orderBefore);
+    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+    if (user.role !== "admin" && (!delivery?.riderId || delivery.status !== "assigned")) return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
+    if (!canVerifyOrderQr({
+      actorId: user.id,
+      actorRole: user.role,
+      purpose: "pickup",
+      orderUserId: orderBefore.userId,
+      orderRiderId: orderBefore.riderId,
+      deliveryRiderId: delivery?.riderId,
+      vendorIds: parties.vendorIds,
+    })) return res.status(403).json({ message: "Only a seller or the assigned rider can confirm this pickup" });
     const [qr] = await db.select().from(orderQrCodes).where(and(eq(orderQrCodes.orderId, orderId), eq(orderQrCodes.code, code), eq(orderQrCodes.purpose, "pickup"), eq(orderQrCodes.status, "active"))).limit(1);
     if (!qr) return res.status(400).json({ message: "Invalid or expired pickup QR code" });
-    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+    const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
+    if (!consumedQr) return res.status(409).json({ message: "This pickup code was already used" });
     const [order] = await db.update(orders).set({ status: "picked_up" as any, pickupConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderId)).returning();
     if (delivery) await db.update(deliveries).set({ status: "picked_up", pickedUpAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id));
-    await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(eq(orderQrCodes.id, qr.id));
     await addTracking(orderId, "picked_up", "Order picked up", "QR verification confirmed rider/vendor handover.", user, { qrId: qr.id });
     await notifyOrderParties(order, "Order Picked Up", "Your order has been picked up by the rider.", "delivery");
     return res.json({ order, verified: true });
@@ -3298,13 +3437,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { code } = z.object({ code: z.string().min(6) }).parse(req.body);
     const [orderBefore] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!orderBefore) return res.status(404).json({ message: "Order not found" });
-    if (user.role !== "admin" && orderBefore.userId !== user.id && orderBefore.riderId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+    if (!canVerifyOrderQr({ actorId: user.id, actorRole: user.role, purpose: "delivery", orderUserId: orderBefore.userId, orderRiderId: orderBefore.riderId, deliveryRiderId: deliveryBefore?.riderId })) return res.status(403).json({ message: "Only the shopper or assigned rider can confirm this delivery" });
+    if (user.role !== "admin" && (!deliveryBefore || !["picked_up", "in_transit"].includes(deliveryBefore.status))) return res.status(409).json({ message: "Pickup must be confirmed before delivery" });
     const [qr] = await db.select().from(orderQrCodes).where(and(eq(orderQrCodes.orderId, orderId), eq(orderQrCodes.code, code), eq(orderQrCodes.purpose, "delivery"), eq(orderQrCodes.status, "active"))).limit(1);
     if (!qr) return res.status(400).json({ message: "Invalid or expired delivery QR code" });
+    const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
+    if (!consumedQr) return res.status(409).json({ message: "This delivery code was already used" });
     const [order] = await db.update(orders).set({ status: "delivered" as any, deliveryConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderId)).returning();
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
     if (delivery) await db.update(deliveries).set({ status: "delivered", deliveredAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id));
-    await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(eq(orderQrCodes.id, qr.id));
+    if (delivery?.riderId) await db.update(deliveryRiders).set({ isAvailable: true, completedDeliveries: sql`${deliveryRiders.completedDeliveries} + 1`, updatedAt: new Date() }).where(eq(deliveryRiders.userId, delivery.riderId));
     await addTracking(orderId, "delivered", "Order delivered", "Shopper/rider QR verification confirmed delivery.", user, { qrId: qr.id });
     await notifyOrderParties(order, "Order Delivered", "Delivery has been verified. Releasing payment now.", "delivery");
     const released = await releaseEscrowForOrder(order, user);
@@ -3322,26 +3465,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [orderBefore] = await db.select().from(orders).where(eq(orders.id, qr.orderId)).limit(1);
       if (!orderBefore) return res.status(404).json({ message: "Order not found" });
       const parties = await getOrderParties(orderBefore);
+      const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderBefore.id)).limit(1);
 
       if (qr.purpose === "pickup") {
-        const allowed = user.role === "admin" || user.role === "delivery_rider" || parties.vendorIds.includes(user.id);
+        if (user.role !== "admin" && (!deliveryBefore?.riderId || deliveryBefore.status !== "assigned")) return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
+        const allowed = canVerifyOrderQr({ actorId: user.id, actorRole: user.role, purpose: "pickup", orderUserId: orderBefore.userId, orderRiderId: orderBefore.riderId, deliveryRiderId: deliveryBefore?.riderId, vendorIds: parties.vendorIds });
         if (!allowed) return res.status(403).json({ message: "Only the vendor, assigned rider, or admin can confirm pickup" });
-        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderBefore.id)).limit(1);
+        const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
+        if (!consumedQr) return res.status(409).json({ message: "This pickup code was already used" });
         const [order] = await db.update(orders).set({ status: "picked_up" as any, pickupConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderBefore.id)).returning();
-        if (delivery) await db.update(deliveries).set({ status: "picked_up", pickedUpAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id));
-        await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(eq(orderQrCodes.id, qr.id));
+        if (deliveryBefore) await db.update(deliveries).set({ status: "picked_up", pickedUpAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, deliveryBefore.id));
         await addTracking(order.id, "picked_up", "Order picked up", "QR verification confirmed vendor-to-rider handover.", user, { qrId: qr.id });
         await notifyOrderParties(order, "Order Picked Up", "Your order has been collected by the rider.", "delivery");
         return res.json({ verified: true, purpose: "pickup", message: "Pickup confirmed", order });
       }
 
       if (qr.purpose === "delivery") {
-        const allowed = user.role === "admin" || orderBefore.userId === user.id || orderBefore.riderId === user.id;
+        const allowed = canVerifyOrderQr({ actorId: user.id, actorRole: user.role, purpose: "delivery", orderUserId: orderBefore.userId, orderRiderId: orderBefore.riderId, deliveryRiderId: deliveryBefore?.riderId });
         if (!allowed) return res.status(403).json({ message: "Only the shopper, assigned rider, or admin can confirm delivery" });
+        if (user.role !== "admin" && (!deliveryBefore || !["picked_up", "in_transit"].includes(deliveryBefore.status))) return res.status(409).json({ message: "Pickup must be confirmed before delivery" });
+        const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
+        if (!consumedQr) return res.status(409).json({ message: "This delivery code was already used" });
         const [order] = await db.update(orders).set({ status: "delivered" as any, deliveryConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderBefore.id)).returning();
-        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderBefore.id)).limit(1);
-        if (delivery) await db.update(deliveries).set({ status: "delivered", deliveredAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id));
-        await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(eq(orderQrCodes.id, qr.id));
+        if (deliveryBefore) await db.update(deliveries).set({ status: "delivered", deliveredAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, deliveryBefore.id));
+        if (deliveryBefore?.riderId) await db.update(deliveryRiders).set({ isAvailable: true, completedDeliveries: sql`${deliveryRiders.completedDeliveries} + 1`, updatedAt: new Date() }).where(eq(deliveryRiders.userId, deliveryBefore.riderId));
         await addTracking(order.id, "delivered", "Order delivered", "QR verification confirmed successful delivery.", user, { qrId: qr.id });
         await notifyOrderParties(order, "Order Delivered", "Delivery has been verified. Settlement can now be processed.", "delivery");
         const settlement = await releaseEscrowForOrder(order, user).catch(() => null);
@@ -3362,29 +3509,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ message: "Order not found" });
     if (user.role !== "admin" && order.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    if (!canReleaseDeliveryPayment(order)) return res.status(409).json({ message: "Delivery must be verified with the one-time delivery code before payment can be released" });
     const result = await releaseEscrowForOrder(order, user);
     return res.json(result);
   });
 
-  app.get("/api/rider/dashboard", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/rider/dashboard", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const profile = await ensureRiderProfile(user);
-    const offers = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered"))).orderBy(desc(deliveryRequests.createdAt)).limit(30);
-    const activeDeliveries = await db.select().from(deliveries).where(and(eq(deliveries.riderId, user.id), ne(deliveries.status, "delivered"), ne(deliveries.status, "cancelled"))).orderBy(desc(deliveries.createdAt)).limit(30);
+    const offeredRows = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered"))).orderBy(desc(deliveryRequests.createdAt)).limit(30);
+    const expiredRows = offeredRows.filter((offer) => !isDeliveryOfferAcceptable(offer));
+    for (const offer of expiredRows) await db.update(deliveryRequests).set({ status: "expired", respondedAt: new Date() }).where(eq(deliveryRequests.id, offer.id));
+    const offers = await Promise.all(offeredRows.filter((offer) => isDeliveryOfferAcceptable(offer)).map(async (offer) => {
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, offer.deliveryId)).limit(1);
+      return { ...offer, delivery: delivery ? {
+        id: delivery.id,
+        pickupAddress: delivery.pickupAddress,
+        pickupLatitude: delivery.pickupLatitude,
+        pickupLongitude: delivery.pickupLongitude,
+        deliveryFee: delivery.deliveryFee,
+      } : null };
+    }));
+    const activeDeliveries = await db.select().from(deliveries).where(and(eq(deliveries.riderId, user.id), inArray(deliveries.status, ["assigned", "picked_up", "in_transit"]))).orderBy(desc(deliveries.createdAt)).limit(30);
     const history = await db.select().from(deliveries).where(eq(deliveries.riderId, user.id)).orderBy(desc(deliveries.createdAt)).limit(50);
     const earningRows = await db.select().from(riderEarnings).where(eq(riderEarnings.riderId, user.id)).orderBy(desc(riderEarnings.createdAt)).limit(50);
     const totalEarnings = earningRows.reduce((sum, e) => sum + Number(e.amount || 0), 0);
     const completion = await computeProfileCompletion(user);
-    return res.json({ profile, offers, activeDeliveries, history, earnings: earningRows, totalEarnings, completion, metrics: { completed: profile?.completedDeliveries || 0, rating: profile?.rating || 0 } });
+    return res.json({ profile: safeRiderProfile(profile), offers, activeDeliveries, history, earnings: earningRows, totalEarnings, completion, metrics: { completed: profile?.completedDeliveries || 0, rating: profile?.rating || 0 } });
   });
 
   app.post("/api/rider/location", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
-    const user = (req as any).user;
-    const { latitude, longitude, accuracy, heading, speed, deliveryId } = z.object({ latitude: z.number(), longitude: z.number(), accuracy: z.number().optional(), heading: z.number().optional(), speed: z.number().optional(), deliveryId: z.string().optional() }).parse(req.body);
-    const [loc] = await db.insert(riderLocations).values({ riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed }).returning();
-    await db.update(deliveryRiders).set({ latitude, longitude, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
-    emitRealtime("rider:location", { riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed, createdAt: loc.createdAt }, deliveryId ? [`delivery:${deliveryId}`, "role:admin"] : ["role:admin"]);
-    return res.status(201).json(loc);
+    try {
+      const user = (req as any).user;
+      const { latitude, longitude, accuracy, heading, speed, deliveryId } = z.object({
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        accuracy: z.number().nonnegative().optional(),
+        heading: z.number().min(0).max(360).optional(),
+        speed: z.number().optional(),
+        deliveryId: z.string().optional(),
+      }).parse(req.body);
+      if (deliveryId) {
+        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, deliveryId)).limit(1);
+        if (!canRiderAccessDelivery(user.id, delivery)) return res.status(403).json({ message: "Location can only be shared for your active delivery" });
+      }
+      const [loc] = await db.insert(riderLocations).values({ riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed }).returning();
+      await db.update(deliveryRiders).set({ latitude, longitude, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
+      emitRealtime("rider:location", { riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed, createdAt: loc.createdAt }, deliveryId ? [`delivery:${deliveryId}`, "role:admin"] : ["role:admin"]);
+      return res.status(201).json(loc);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
+      return res.status(500).json({ message: "Location update failed" });
+    }
   });
 
   app.get("/api/admin/orders/live", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
