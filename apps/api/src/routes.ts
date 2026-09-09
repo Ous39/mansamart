@@ -10,7 +10,7 @@ import {
   users, sessions, products, services, orders, bookings,
   reviews, cartItems, wishlistItems, notifications,
   userActivity, flashDeals, addresses, shopperProfiles, vendorProfiles, providerProfiles, coupons, banners,
-  wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, conversations, messages, productVariants, serviceSlots,
+  wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
   orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, pushNotifications, auditLogs,
 } from "@mansamart/database/schema";
 import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql } from "drizzle-orm";
@@ -22,6 +22,7 @@ import {
 import { z } from "zod";
 import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
 import { registerPaymentRoutes } from "./payments/routes";
+import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
 
 type RealtimePayload = Record<string, any>;
 type RealtimeEmitter = (event: string, payload: RealtimePayload, rooms?: string[]) => void;
@@ -457,6 +458,67 @@ async function computeProfileCompletion(user: any) {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+
+  async function createVerifiedCustomerReview(
+    user: any,
+    targetType: "product" | "service",
+    targetId: string,
+    rating: number,
+    text: string,
+  ) {
+    if (user.role !== "user") {
+      return { error: "Only customer accounts can submit marketplace reviews", status: 403, review: null };
+    }
+
+    const [orderHistory, bookingHistory, duplicate] = await Promise.all([
+      db.select({ status: orders.status, items: orders.items }).from(orders).where(eq(orders.userId, user.id)),
+      db.select({ status: bookings.status, serviceId: bookings.serviceId }).from(bookings).where(eq(bookings.userId, user.id)),
+      db.select().from(reviews).where(and(
+        eq(reviews.userId, user.id),
+        eq(reviews.targetType, targetType),
+        eq(reviews.targetId, targetId),
+      )).limit(1),
+    ]);
+
+    if (duplicate.length > 0) return { error: "You already reviewed this item", status: 409, review: null };
+    if (!hasVerifiedReviewHistory(targetType, targetId, orderHistory, bookingHistory)) {
+      return { error: "Complete this purchase or booking before leaving a review", status: 403, review: null };
+    }
+
+    const target = targetType === "product"
+      ? await db.select({ id: products.id }).from(products).where(eq(products.id, targetId)).limit(1)
+      : await db.select({ id: services.id }).from(services).where(eq(services.id, targetId)).limit(1);
+    if (target.length === 0) return { error: "Review target not found", status: 404, review: null };
+
+    let review: typeof reviews.$inferSelect;
+    try {
+      [review] = await db.insert(reviews).values({
+        userId: user.id,
+        targetId,
+        targetType,
+        name: user.name,
+        rating,
+        text,
+        verified: true,
+      }).returning();
+    } catch (error: any) {
+      if (error?.code === "23505") return { error: "You already reviewed this item", status: 409, review: null };
+      throw error;
+    }
+
+    const targetReviews = await db.select({ rating: reviews.rating }).from(reviews).where(and(
+      eq(reviews.targetType, targetType),
+      eq(reviews.targetId, targetId),
+    ));
+    const average = targetReviews.reduce((sum, item) => sum + item.rating, 0) / targetReviews.length;
+    if (targetType === "product") {
+      await db.update(products).set({ rating: average, reviewCount: targetReviews.length }).where(eq(products.id, targetId));
+    } else {
+      await db.update(services).set({ rating: average, reviewCount: targetReviews.length }).where(eq(services.id, targetId));
+    }
+
+    return { review, error: null, status: 201 };
+  }
 
   registerPaymentRoutes(app);
 
@@ -1165,33 +1227,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/bookings", requireAuth, async (req: Request, res: Response) => {
     const user = (req as any).user;
-    let rows;
+    let rows: Array<{ booking: typeof bookings.$inferSelect; providerName: string | null }>;
     if (user.role === "admin") {
-      rows = await db.select().from(bookings).orderBy(desc(bookings.createdAt));
+      rows = await db.select({ booking: bookings, providerName: services.providerName })
+        .from(bookings).leftJoin(services, eq(bookings.serviceId, services.id))
+        .orderBy(desc(bookings.createdAt));
     } else if (user.role === "service_provider") {
-      rows = await db.select().from(bookings).where(eq(bookings.providerId, user.id)).orderBy(desc(bookings.createdAt));
+      rows = await db.select({ booking: bookings, providerName: services.providerName })
+        .from(bookings).leftJoin(services, eq(bookings.serviceId, services.id))
+        .where(eq(bookings.providerId, user.id)).orderBy(desc(bookings.createdAt));
     } else {
-      rows = await db.select().from(bookings).where(eq(bookings.userId, user.id)).orderBy(desc(bookings.createdAt));
+      rows = await db.select({ booking: bookings, providerName: services.providerName })
+        .from(bookings).leftJoin(services, eq(bookings.serviceId, services.id))
+        .where(eq(bookings.userId, user.id)).orderBy(desc(bookings.createdAt));
     }
-    return res.json(rows);
+    return res.json(rows.map(({ booking, providerName }) => ({ ...booking, providerName })));
   });
 
-  app.post("/api/bookings", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/bookings", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const schema = z.object({
         serviceId: z.string(),
-        serviceName: z.string(),
-        date: z.string(),
-        time: z.string(),
-        address: z.string().optional(),
-        notes: z.string().optional(),
-        price: z.number(),
-        providerId: z.string().optional(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        time: z.string().min(2).max(30),
+        address: z.string().trim().min(5).max(500),
+        notes: z.string().trim().max(1000).optional(),
       });
       const data = schema.parse(req.body);
+      const appointment = new Date(`${data.date}T23:59:59`);
+      const latestAllowed = new Date();
+      latestAllowed.setDate(latestAllowed.getDate() + 90);
+      if (Number.isNaN(appointment.getTime()) || appointment < new Date() || appointment > latestAllowed) {
+        return res.status(400).json({ message: "Choose a service date within the next 90 days" });
+      }
+
+      const [service] = await db.select().from(services).where(eq(services.id, data.serviceId)).limit(1);
+      if (!service || !service.isAvailable) return res.status(404).json({ message: "Service is unavailable" });
+
+      const [duplicate] = await db.select().from(bookings).where(and(
+        eq(bookings.userId, user.id),
+        eq(bookings.serviceId, service.id),
+        eq(bookings.date, data.date),
+        eq(bookings.time, data.time),
+        ne(bookings.status, "cancelled"),
+      )).limit(1);
+      if (duplicate) return res.status(409).json({ message: "You already booked this service for that time" });
+
       const [b] = await db.insert(bookings).values({
-        ...data,
+        serviceId: service.id,
+        serviceName: service.name,
+        providerId: service.providerId,
+        date: data.date,
+        time: data.time,
+        address: data.address,
+        notes: data.notes,
+        price: service.price,
         userId: user.id,
         userName: user.name,
       }).returning();
@@ -1200,13 +1291,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId: user.id,
         type: "booking",
         title: "Booking Submitted!",
-        body: `Your booking for ${data.serviceName} on ${data.date} at ${data.time} is pending confirmation.`,
+        body: `Your booking for ${service.name} on ${data.date} at ${data.time} is pending confirmation.`,
         icon: "calendar-outline",
         color: "#7B4FA3",
-        actionRoute: "/(tabs)/wishlist",
+        actionRoute: "/bookings",
       });
 
-      return res.status(201).json(b);
+      if (service.providerId) {
+        await db.insert(notifications).values({
+          userId: service.providerId,
+          type: "booking",
+          title: "New Service Booking",
+          body: `${user.name} requested ${service.name} on ${data.date} at ${data.time}.`,
+          icon: "calendar-outline",
+          color: "#7B4FA3",
+          actionRoute: "/bookings",
+        });
+      }
+
+      return res.status(201).json({ ...b, providerName: service.providerName });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
       return res.status(500).json({ message: "Server error" });
@@ -1216,13 +1319,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/bookings/:id/status", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { status } = z.object({ status: z.string() }).parse(req.body);
+      const { status } = z.object({ status: z.enum(BOOKING_STATUSES) }).parse(req.body);
+      const [current] = await db.select().from(bookings).where(eq(bookings.id, param(req, "id"))).limit(1);
+      if (!current) return res.status(404).json({ message: "Booking not found" });
+      if (!canUpdateBookingStatus(user, current, status)) {
+        return res.status(403).json({ message: "You cannot make that booking status change" });
+      }
       const [b] = await db.update(bookings)
         .set({ status: status as any })
         .where(eq(bookings.id, param(req, "id")))
         .returning();
+      if (b.userId && b.userId !== user.id) {
+        await db.insert(notifications).values({
+          userId: b.userId,
+          type: "booking",
+          title: "Booking Updated",
+          body: `${b.serviceName} is now ${status.replace(/_/g, " ")}.`,
+          icon: "calendar-outline",
+          color: "#7B4FA3",
+          actionRoute: "/bookings",
+        });
+      }
       return res.json(b);
-    } catch {
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: "Invalid booking status" });
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -1244,22 +1364,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/cart", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { productId, quantity = 1 } = z.object({ productId: z.string(), quantity: z.number().optional() }).parse(req.body);
+      const { productId, quantity = 1, ...selectionInput } = z.object({
+        productId: z.string(),
+        quantity: z.number().int().min(1).max(99).optional(),
+        selectedColor: z.string().trim().min(1).max(100).optional(),
+        selectedSize: z.string().trim().min(1).max(100).optional(),
+        selectedVariant: z.string().trim().min(1).max(100).optional(),
+        selectedOptions: z.record(z.union([z.string().max(500), z.number(), z.boolean(), z.null()]))
+          .refine((value) => Object.keys(value).length <= 20, "Too many product options")
+          .optional(),
+      }).parse(req.body);
+      const selection = normalizeCartSelection(selectionInput);
 
       const [product] = await db.select().from(products).where(eq(products.id, productId)).limit(1);
       if (!product || !product.inStock || Number(product.stock || 0) <= 0) return res.status(400).json({ message: "Product is out of stock" });
       const [existing] = await db.select().from(cartItems)
-        .where(and(eq(cartItems.userId, user.id), eq(cartItems.productId, productId))).limit(1);
+        .where(and(
+          eq(cartItems.userId, user.id),
+          eq(cartItems.productId, productId),
+          eq(cartItems.optionKey, selection.optionKey),
+        )).limit(1);
 
       if (existing) {
+        const nextQuantity = existing.quantity + quantity;
+        if (nextQuantity > Math.min(product.stock, 99)) return res.status(409).json({ message: `Only ${Math.min(product.stock, 99)} item(s) available` });
         const [updated] = await db.update(cartItems)
-          .set({ quantity: existing.quantity + (quantity ?? 1) })
+          .set({ quantity: nextQuantity, ...selection })
           .where(eq(cartItems.id, existing.id))
           .returning();
         return res.json(updated);
       }
 
-      const [item] = await db.insert(cartItems).values({ userId: user.id, productId, quantity }).returning();
+      if (quantity > product.stock) return res.status(409).json({ message: `Only ${product.stock} item(s) available` });
+      const [item] = await db.insert(cartItems).values({ userId: user.id, productId, quantity, ...selection }).returning();
       return res.status(201).json(item);
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: "Invalid data" });
@@ -1270,12 +1407,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/cart/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { quantity } = z.object({ quantity: z.number().min(1) }).parse(req.body);
+      const { quantity } = z.object({ quantity: z.number().int().min(1).max(99) }).parse(req.body);
       const [item] = await db.select().from(cartItems).where(eq(cartItems.id, param(req, "id"))).limit(1);
       if (!item || item.userId !== user.id) return res.status(404).json({ message: "Not found" });
+      const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+      if (!product || !product.inStock || quantity > product.stock) {
+        return res.status(409).json({ message: product ? `Only ${product.stock} item(s) available` : "Product is unavailable" });
+      }
       const [updated] = await db.update(cartItems).set({ quantity }).where(eq(cartItems.id, param(req, "id"))).returning();
       return res.json(updated);
-    } catch {
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: "Quantity must be between 1 and 99" });
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -1332,6 +1474,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // REVIEWS
   // ────────────────────────────────────────────────────────────────
 
+  app.get("/api/customer/reviews", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const rows = await db.select().from(reviews)
+      .where(eq(reviews.userId, user.id))
+      .orderBy(desc(reviews.createdAt));
+    return res.json(rows);
+  });
+
+  app.get("/api/customer/review-eligibility", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const [completedOrders, completedBookings, existingReviews] = await Promise.all([
+      db.select({ status: orders.status, items: orders.items }).from(orders).where(and(
+        eq(orders.userId, user.id),
+        inArray(orders.status, ["delivered", "completed"]),
+      )),
+      db.select().from(bookings).where(and(eq(bookings.userId, user.id), eq(bookings.status, "completed"))),
+      db.select({ targetId: reviews.targetId, targetType: reviews.targetType }).from(reviews).where(eq(reviews.userId, user.id)),
+    ]);
+
+    const reviewed = new Set(existingReviews.map((review) => `${review.targetType}:${review.targetId}`));
+    const productsToReview = new Map<string, { targetType: "product"; targetId: string; name: string; subtitle?: string; image?: string }>();
+    for (const order of completedOrders) {
+      if (!Array.isArray(order.items)) continue;
+      for (const item of order.items) {
+        if (!item?.productId || reviewed.has(`product:${item.productId}`)) continue;
+        productsToReview.set(item.productId, {
+          targetType: "product",
+          targetId: item.productId,
+          name: item.name,
+          subtitle: item.vendorName || undefined,
+          image: item.image || undefined,
+        });
+      }
+    }
+
+    const servicesToReview = new Map<string, { targetType: "service"; targetId: string; name: string; subtitle: string }>();
+    for (const booking of completedBookings) {
+      if (!booking.serviceId || reviewed.has(`service:${booking.serviceId}`)) continue;
+      servicesToReview.set(booking.serviceId, {
+        targetType: "service" as const,
+        targetId: booking.serviceId,
+        name: booking.serviceName,
+        subtitle: `Completed ${booking.date}`,
+      });
+    }
+
+    return res.json([...productsToReview.values(), ...servicesToReview.values()]);
+  });
+
   app.get("/api/reviews/:targetId", async (req: Request, res: Response) => {
     const rows = await db.select().from(reviews)
       .where(eq(reviews.targetId, param(req, "targetId")))
@@ -1349,8 +1540,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         text: z.string().min(5),
       });
       const data = schema.parse(req.body);
-      const [r] = await db.insert(reviews).values({ ...data, userId: user.id, name: user.name }).returning();
-      return res.status(201).json(r);
+      const result = await createVerifiedCustomerReview(user, data.targetType, data.targetId, data.rating, data.text);
+      if (result.error) return res.status(result.status).json({ message: result.error });
+      return res.status(201).json(result.review);
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
       return res.status(500).json({ message: "Server error" });
@@ -1727,12 +1919,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/reviews/:targetType/:targetId", requireAuth, async (req: Request, res: Response) => {
-    const user = (req as any).user;
-    const targetType = param(req, "targetType");
-    const targetId = param(req, "targetId");
-    const { rating, text } = z.object({ rating: z.number().min(1).max(5), text: z.string().min(5) }).parse(req.body);
-    const [rev] = await db.insert(reviews).values({ userId: user.id, targetId, targetType, name: user.name, rating, text, verified: true }).returning();
-    return res.json(rev);
+    try {
+      const user = (req as any).user;
+      const targetType = z.enum(["product", "service"]).parse(param(req, "targetType"));
+      const targetId = param(req, "targetId");
+      const { rating, text } = z.object({ rating: z.number().int().min(1).max(5), text: z.string().trim().min(5).max(2000) }).parse(req.body);
+      const result = await createVerifiedCustomerReview(user, targetType, targetId, rating, text);
+      if (result.error) return res.status(result.status).json({ message: result.error });
+      return res.status(201).json(result.review);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: "Invalid review" });
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.post("/api/reviews/:id/helpful", requireAuth, async (req: Request, res: Response) => {
@@ -2535,11 +2733,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // SUPPORT TICKETS & CHAT-READY MESSAGING
   // ────────────────────────────────────────────────────────────────
-  app.post("/api/support/tickets", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/support/tickets", requireAuth, async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const { subject, message, priority } = z.object({ subject: z.string().min(3), message: z.string().min(5), priority: z.string().default("normal") }).parse(req.body);
-    const [ticket] = await db.insert(supportTickets).values({ userId: user.id, subject, message, priority }).returning();
-    return res.status(201).json(ticket);
+    const rows = user.role === "admin"
+      ? await db.select().from(supportTickets).orderBy(desc(supportTickets.createdAt)).limit(200)
+      : await db.select().from(supportTickets).where(eq(supportTickets.userId, user.id)).orderBy(desc(supportTickets.createdAt)).limit(100);
+    return res.json(rows);
+  });
+
+  app.post("/api/support/tickets", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const { subject, message, priority } = z.object({
+        subject: z.string().trim().min(3).max(160),
+        message: z.string().trim().min(10).max(4000),
+        priority: z.enum(["low", "normal", "high"]).default("normal"),
+      }).parse(req.body);
+      const [ticket] = await db.insert(supportTickets).values({ userId: user.id, subject, message, priority }).returning();
+      return res.status(201).json(ticket);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message || "Invalid support request" });
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/customer/returns", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const rows = await db.select({ request: returnRequests, orderTotal: orders.total, orderStatus: orders.status })
+      .from(returnRequests)
+      .innerJoin(orders, eq(returnRequests.orderId, orders.id))
+      .where(eq(returnRequests.userId, user.id))
+      .orderBy(desc(returnRequests.createdAt));
+    return res.json(rows.map(({ request, orderTotal, orderStatus }) => ({ ...request, orderTotal, orderStatus })));
+  });
+
+  app.get("/api/customer/return-eligibility", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const [rows, activeRequests] = await Promise.all([
+      db.select().from(orders).where(eq(orders.userId, user.id)).orderBy(desc(orders.updatedAt)),
+      db.select({ orderId: returnRequests.orderId }).from(returnRequests).where(and(
+        eq(returnRequests.userId, user.id),
+        inArray(returnRequests.status, ["submitted", "reviewing", "approved"]),
+      )),
+    ]);
+    const activeOrderIds = new Set(activeRequests.map((request) => request.orderId));
+    return res.json(rows
+      .filter((order) => !activeOrderIds.has(order.id) && isOrderReturnEligible(order))
+      .map((order) => ({
+        id: order.id,
+        total: order.total,
+        status: order.status,
+        items: order.items,
+        deliveredAt: order.updatedAt,
+        returnBy: new Date(order.updatedAt.getTime() + 7 * 24 * 60 * 60 * 1000),
+      })));
+  });
+
+  app.post("/api/customer/returns", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const data = z.object({
+        orderId: z.string(),
+        requestType: z.enum(["return", "refund"]),
+        reason: z.string().trim().min(3).max(160),
+        details: z.string().trim().min(10).max(2000),
+      }).parse(req.body);
+      const [order] = await db.select().from(orders).where(and(eq(orders.id, data.orderId), eq(orders.userId, user.id))).limit(1);
+      if (!order) return res.status(404).json({ message: "Order not found" });
+      if (!isOrderReturnEligible(order)) {
+        return res.status(409).json({ message: "This order is outside the 7-day return window or has not been delivered" });
+      }
+      const [existing] = await db.select().from(returnRequests).where(and(
+        eq(returnRequests.userId, user.id),
+        eq(returnRequests.orderId, order.id),
+        inArray(returnRequests.status, ["submitted", "reviewing", "approved"]),
+      )).limit(1);
+      if (existing) return res.status(409).json({ message: "An active request already exists for this order" });
+
+      const [request] = await db.insert(returnRequests).values({
+        userId: user.id,
+        orderId: order.id,
+        requestType: data.requestType,
+        reason: data.reason,
+        details: data.details,
+      }).returning();
+      await db.insert(notifications).values({
+        userId: user.id,
+        type: "return",
+        title: "Request Submitted",
+        body: `Your ${data.requestType} request for order #${order.id.slice(0, 8).toUpperCase()} is under review.`,
+        icon: "return-down-back-outline",
+        color: "#D97706",
+        actionRoute: "/returns",
+      });
+      return res.status(201).json(request);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message || "Invalid return request" });
+      if (err?.code === "23505") return res.status(409).json({ message: "An active request already exists for this order" });
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/conversations", requireAuth, async (req: Request, res: Response) => {

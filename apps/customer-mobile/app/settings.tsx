@@ -18,7 +18,7 @@ async function apiCall(path: string, method: string, body?: any) {
   const token = getToken();
   const r = await fetch(new URL(path, getApiUrl()).toString(), {
     method,
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { "Content-Type": "application/json", "X-MansaMart-App": "customer", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || "Request failed"); }
@@ -82,23 +82,25 @@ export default function SettingsScreen() {
         </View>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Activity</Text>
-          <SettingRow icon="bag-outline" label="My Orders" onPress={() => router.push("/(tabs)/wishlist" as any)} />
-          <SettingRow icon="calendar-outline" label="My Bookings" onPress={() => router.push("/(tabs)/wishlist" as any)} />
+          <SettingRow icon="bag-outline" label="My Orders" onPress={() => router.push({ pathname: "/(tabs)/wishlist", params: { tab: "history" } })} />
+          <SettingRow icon="calendar-outline" label="My Bookings" onPress={() => router.push({ pathname: "/(tabs)/wishlist", params: { tab: "bookings" } })} />
           <SettingRow icon="heart-outline" label="Wishlist" onPress={() => router.push("/(tabs)/wishlist")} />
-          <SettingRow icon="notifications-outline" label="Notifications" onPress={() => router.push("/(tabs)/wishlist" as any)} />
+          <SettingRow icon="star-outline" label="My Reviews" onPress={() => router.push("/my-reviews")} />
+          <SettingRow icon="return-down-back-outline" label="Returns & Refunds" onPress={() => router.push("/returns")} />
+          <SettingRow icon="notifications-outline" label="Notifications" onPress={() => router.push("/notifications")} />
         </View>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Support</Text>
-          <SettingRow icon="chatbubble-outline" label="Help Center" onPress={() => {}} />
-          <SettingRow icon="document-text-outline" label="Terms & Conditions" onPress={() => {}} />
-          <SettingRow icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => {}} />
-          <SettingRow icon="information-circle-outline" label="About MansaMart" onPress={() => {}} />
+          <SettingRow icon="chatbubble-outline" label="Help Center" onPress={() => router.push("/support")} />
+          <SettingRow icon="document-text-outline" label="Terms & Conditions" onPress={() => router.push({ pathname: "/information", params: { page: "terms" } })} />
+          <SettingRow icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => router.push({ pathname: "/information", params: { page: "privacy" } })} />
+          <SettingRow icon="information-circle-outline" label="About MansaMart" onPress={() => router.push({ pathname: "/information", params: { page: "about" } })} />
         </View>
         <Pressable style={styles.logoutBtn} onPress={() => { logout(); router.replace("/(auth)/login"); }}>
           <Ionicons name="log-out-outline" size={18} color="#E63946" />
           <Text style={styles.logoutText}>Log Out</Text>
         </Pressable>
-        <Text style={styles.version}>MansaMart v1.0 • MansaMart</Text>
+        <Text style={styles.version}>MansaMart Customer v2.0</Text>
         <View style={{ height: Platform.OS === "web" ? 34 : insets.bottom + 20 }} />
       </ScrollView>
     </View>

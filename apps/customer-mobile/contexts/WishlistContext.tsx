@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from "react";
+import React, { createContext, useCallback, useContext, useState, useMemo, ReactNode, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getToken } from "@/lib/auth-token";
 import { getApiUrl } from "@/lib/query-client";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface WishlistContextValue {
   items: any[];
@@ -13,35 +14,37 @@ const WishlistContext = createContext<WishlistContextValue | null>(null);
 
 export function WishlistProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<any[]>([]);
+  const { user, isLoading: authLoading } = useAuth();
+  const storageKey = `mansamart_wishlist:${user?.id || "guest"}`;
 
-  useEffect(() => {
-    loadWishlist();
-  }, []);
-
-  const loadWishlist = async () => {
+  const loadWishlist = useCallback(async () => {
     try {
       const token = getToken();
       if (token) {
         const url = new URL("/api/wishlist", getApiUrl()).toString();
-        const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        const resp = await fetch(url, { headers: { "X-MansaMart-App": "customer", Authorization: `Bearer ${token}` } });
         if (resp.ok) {
           const data: any[] = await resp.json();
           const serverItems = data.map((row: any) => row.product ?? row);
           setItems(serverItems);
-          await AsyncStorage.setItem("gambia_wishlist", JSON.stringify(serverItems));
+          await AsyncStorage.setItem(storageKey, JSON.stringify(serverItems));
           return;
         }
       }
     } catch {}
     try {
-      const stored = await AsyncStorage.getItem("gambia_wishlist");
-      if (stored) setItems(JSON.parse(stored));
+      const stored = await AsyncStorage.getItem(storageKey);
+      setItems(stored ? JSON.parse(stored) : []);
     } catch {}
-  };
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!authLoading) void loadWishlist();
+  }, [authLoading, loadWishlist]);
 
   const saveWishlist = async (newItems: any[]) => {
     try {
-      await AsyncStorage.setItem("gambia_wishlist", JSON.stringify(newItems));
+      await AsyncStorage.setItem(storageKey, JSON.stringify(newItems));
     } catch {}
   };
 
@@ -50,7 +53,7 @@ export function WishlistProvider({ children }: { children: ReactNode }) {
     if (!token) return;
     fetch(new URL(path, getApiUrl()).toString(), {
       method,
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", "X-MansaMart-App": "customer", Authorization: `Bearer ${token}` },
       body: body ? JSON.stringify(body) : undefined,
     }).catch(() => {});
   };

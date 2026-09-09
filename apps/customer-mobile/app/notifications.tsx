@@ -16,7 +16,7 @@ async function apiCall(path: string, method = "PUT") {
   const token = getToken();
   const r = await fetch(new URL(path, getApiUrl()).toString(), {
     method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", "X-MansaMart-App": "customer", Authorization: `Bearer ${token}` },
   });
   if (!r.ok) throw new Error("Failed");
   return r.json();
@@ -156,7 +156,14 @@ export default function NotificationsScreen() {
           renderItem={({ item }) => (
             <NotifCard
               item={item}
-              onPress={() => { if (!item.isRead) markRead.mutate(item.id); }}
+              onPress={() => {
+                if (!item.isRead) markRead.mutate(item.id);
+                if (item.actionRoute === "/bookings") {
+                  router.push({ pathname: "/(tabs)/wishlist", params: { tab: "bookings" } });
+                } else if (item.actionRoute) {
+                  router.push(item.actionRoute as any);
+                }
+              }}
             />
           )}
         />

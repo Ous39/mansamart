@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useMemo, ReactNode, useEffe
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiRequest, getApiUrl } from "@/lib/query-client";
 import { getToken } from "@/lib/auth-token";
+import { useAuth } from "@/contexts/AuthContext";
 
 export interface Booking {
   id: string;
@@ -20,10 +21,18 @@ export interface Booking {
   createdAt?: string;
 }
 
+export interface NewBookingInput {
+  serviceId: string;
+  date: string;
+  time: string;
+  address: string;
+  notes?: string;
+}
+
 interface BookingContextValue {
   bookings: Booking[];
   isLoading: boolean;
-  addBooking: (booking: Omit<Booking, "id" | "createdAt">) => Promise<Booking>;
+  addBooking: (booking: NewBookingInput) => Promise<Booking>;
   updateBookingStatus: (bookingId: string, status: Booking["status"]) => Promise<void>;
   cancelBooking: (bookingId: string) => Promise<void>;
   getBookingsForUser: (userId: string) => Booking[];
@@ -38,7 +47,10 @@ async function authedGet(path: string) {
   const token = getToken();
   const url = new URL(path, getApiUrl());
   const res = await fetch(url.toString(), {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      "X-MansaMart-App": process.env.EXPO_PUBLIC_APP_AUDIENCE || "customer",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
   return res;
 }
@@ -46,18 +58,13 @@ async function authedGet(path: string) {
 export function BookingProvider({ children }: { children: ReactNode }) {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const { user, isLoading: authLoading } = useAuth();
+  const storageKey = `mansamart_bookings:${user?.id || "guest"}`;
 
-  useEffect(() => {
-    loadBookings();
-  }, []);
-
-  const loadBookings = async () => {
+  const loadBookings = useCallback(async () => {
     const token = getToken();
     if (!token) {
-      try {
-        const stored = await AsyncStorage.getItem("oceanbrown_bookings");
-        if (stored) setBookings(JSON.parse(stored));
-      } catch {}
+      setBookings([]);
       return;
     }
 
@@ -65,34 +72,35 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     try {
       const res = await authedGet("/api/bookings");
       if (res.ok) {
-        setBookings(await res.json());
+        const rows = await res.json();
+        setBookings(rows);
+        await AsyncStorage.setItem(storageKey, JSON.stringify(rows));
+        return;
       }
     } catch {
       try {
-        const stored = await AsyncStorage.getItem("oceanbrown_bookings");
+        const stored = await AsyncStorage.getItem(storageKey);
         if (stored) setBookings(JSON.parse(stored));
       } catch {}
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-  };
+  }, [storageKey]);
 
-  const addBooking = async (booking: Omit<Booking, "id" | "createdAt">): Promise<Booking> => {
+  useEffect(() => {
+    if (!authLoading) void loadBookings();
+  }, [authLoading, loadBookings]);
+
+  const addBooking = async (booking: NewBookingInput): Promise<Booking> => {
     const token = getToken();
-    if (token) {
-      const res = await apiRequest("POST", "/api/bookings", booking);
-      const newBooking: Booking = await res.json();
-      setBookings(prev => [newBooking, ...prev]);
-      return newBooking;
-    }
-
-    const newBooking: Booking = {
-      ...booking,
-      id: "b" + Date.now().toString().slice(-8),
-      createdAt: new Date().toISOString().split("T")[0],
-    };
-    const updated = [newBooking, ...bookings];
-    setBookings(updated);
-    await AsyncStorage.setItem("oceanbrown_bookings", JSON.stringify(updated));
+    if (!token) throw new Error("Sign in before booking a service");
+    const res = await apiRequest("POST", "/api/bookings", booking);
+    const newBooking: Booking = await res.json();
+    setBookings(prev => {
+      const next = [newBooking, ...prev];
+      void AsyncStorage.setItem(storageKey, JSON.stringify(next));
+      return next;
+    });
     return newBooking;
   };
 
@@ -101,7 +109,11 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     if (token) {
       await apiRequest("PUT", `/api/bookings/${bookingId}/status`, { status });
     }
-    setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status } : b));
+    setBookings(prev => {
+      const next = prev.map(b => b.id === bookingId ? { ...b, status } : b);
+      void AsyncStorage.setItem(storageKey, JSON.stringify(next));
+      return next;
+    });
   };
 
   const cancelBooking = async (bookingId: string) => {
@@ -110,7 +122,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     await loadBookings();
-  }, []);
+  }, [loadBookings]);
 
   const getBookingsForUser = (userId: string) => bookings.filter(b => b.userId === userId);
   const getBookingsForProvider = (providerId: string) => bookings.filter(b => b.providerId === providerId);

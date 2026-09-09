@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -8,8 +8,9 @@ import {
   Image,
   Platform,
   ActivityIndicator,
+  Alert,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -17,10 +18,8 @@ import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useWishlist } from "@/contexts/WishlistContext";
 import { useCart } from "@/contexts/CartContext";
-import { useBookings } from "@/contexts/BookingContext";
+import { useBookings, type Booking } from "@/contexts/BookingContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { Product } from "@/data/products";
-import { Booking } from "@/contexts/BookingContext";
 import { getProductMainImage } from "@/lib/product-media";
 
 function WishlistItem({ product, onRemove, onAddToCart }: { product: any; onRemove: () => void; onAddToCart: () => void }) {
@@ -125,7 +124,7 @@ function BookingCard({ booking, onCancel }: { booking: Booking; onCancel: () => 
         {booking.status === "completed" && (
           <Pressable
             style={styles.reviewBtn}
-            onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+            onPress={() => router.push({ pathname: "/my-reviews", params: { targetType: "service", targetId: booking.serviceId } })}
           >
             <Ionicons name="star-outline" size={13} color={Colors.primary} />
             <Text style={styles.reviewBtnText}>Leave Review</Text>
@@ -148,7 +147,7 @@ function HistoryCard({ order }: { order: any }) {
   const items: any[] = Array.isArray(order.items) ? order.items : [];
 
   return (
-    <View style={styles.historyCard}>
+    <Pressable style={styles.historyCard} onPress={() => router.push({ pathname: "/order/[id]", params: { id: order.id } })}>
       <View style={styles.historyHeader}>
         <View>
           <Text style={styles.historyId}>Order #{String(order.id).slice(0, 8).toUpperCase()}</Text>
@@ -191,7 +190,7 @@ function HistoryCard({ order }: { order: any }) {
         </View>
         <View style={styles.historyActions}>
           {order.status === "delivered" && (
-            <Pressable style={styles.reviewBtn} onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}>
+            <Pressable style={styles.reviewBtn} onPress={() => router.push("/my-reviews")}>
               <Ionicons name="star-outline" size={13} color={Colors.primary} />
               <Text style={styles.reviewBtnText}>Review</Text>
             </Pressable>
@@ -204,20 +203,24 @@ function HistoryCard({ order }: { order: any }) {
           </Pressable>
         </View>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
 export default function WishlistScreen() {
+  const { tab } = useLocalSearchParams<{ tab?: string }>();
   const insets = useSafeAreaInsets();
   const { items, toggle } = useWishlist();
   const { addToCart, totalItems } = useCart();
   const { user, isAuthenticated } = useAuth();
   const { getBookingsForUser, cancelBooking } = useBookings();
-  const [activeTab, setActiveTab] = useState<"saved" | "bookings" | "history">("saved");
+  const initialTab = tab === "bookings" || tab === "history" ? tab : "saved";
+  const [activeTab, setActiveTab] = useState<"saved" | "bookings" | "history">(initialTab);
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
 
   const myBookings = user ? getBookingsForUser(user.id) : [];
+
+  useEffect(() => setActiveTab(initialTab), [initialTab]);
 
   const { data: orders = [], isLoading: ordersLoading } = useQuery<any[]>({
     queryKey: ["/api/orders"],
@@ -344,8 +347,21 @@ export default function WishlistScreen() {
                 <BookingCard
                   booking={item}
                   onCancel={() => {
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                    cancelBooking(item.id);
+                    Alert.alert("Cancel booking", `Cancel ${item.serviceName}?`, [
+                      { text: "Keep booking", style: "cancel" },
+                      {
+                        text: "Cancel booking",
+                        style: "destructive",
+                        onPress: async () => {
+                          try {
+                            await cancelBooking(item.id);
+                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                          } catch (error: any) {
+                            Alert.alert("Could not cancel", String(error?.message || "Please try again."));
+                          }
+                        },
+                      },
+                    ]);
                   }}
                 />
               )}

@@ -10,12 +10,14 @@ import {
   Platform,
   TextInput,
   Modal,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from "react-native-reanimated";
 import Colors from "@/constants/colors";
 import { serviceCategories } from "@/data/services";
 import { useBookings } from "@/contexts/BookingContext";
@@ -59,6 +61,7 @@ export default function ServiceDetailScreen() {
   const [notes, setNotes] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [isBooked, setIsBooked] = useState(false);
+  const [bookingPending, setBookingPending] = useState(false);
   const btnScale = useSharedValue(1);
 
   const btnStyle = useAnimatedStyle(() => ({ transform: [{ scale: btnScale.value }] }));
@@ -91,26 +94,24 @@ export default function ServiceDetailScreen() {
       router.push("/(auth)/login");
       return;
     }
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    btnScale.value = withSpring(0.95, { damping: 10 }, () => {
-      btnScale.value = withSpring(1);
-    });
-    await addBooking({
-      serviceId: service.id,
-      serviceName: service.name,
-      userId: user.id,
-      userName: user.name,
-      providerId: service.providerId,
-      providerName: service.providerName,
-      date: selectedDay,
-      time: selectedTime,
-      status: "pending",
-      price: service.price,
-      notes,
-      address,
-    });
-    setIsBooked(true);
-    setShowModal(true);
+    if (address.trim().length < 5) {
+      Alert.alert("Address required", "Enter the address where the service should be provided.");
+      return;
+    }
+    setBookingPending(true);
+    try {
+      btnScale.value = withSpring(0.95, { damping: 10 }, () => {
+        btnScale.value = withSpring(1);
+      });
+      await addBooking({ serviceId: service.id, date: selectedDay, time: selectedTime, notes, address: address.trim() });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsBooked(true);
+      setShowModal(true);
+    } catch (error: any) {
+      Alert.alert("Booking not submitted", String(error?.message || "Please check your connection and try again.").replace(/^\d+:\s*/, ""));
+    } finally {
+      setBookingPending(false);
+    }
   };
 
   return (
@@ -269,9 +270,9 @@ export default function ServiceDetailScreen() {
           <Text style={styles.totalPrice}>D {service.price}{priceLabel}</Text>
         </View>
         <Animated.View style={[{ flex: 1 }, btnStyle]}>
-          <Pressable style={styles.bookBtn} onPress={handleBook}>
-            <Ionicons name="calendar-outline" size={18} color="#fff" />
-            <Text style={styles.bookBtnText}>Book Now</Text>
+          <Pressable style={[styles.bookBtn, bookingPending && { opacity: 0.65 }]} onPress={handleBook} disabled={bookingPending || isBooked}>
+            {bookingPending ? <ActivityIndicator color="#fff" /> : <Ionicons name="calendar-outline" size={18} color="#fff" />}
+            <Text style={styles.bookBtnText}>{isBooked ? "Booking Submitted" : bookingPending ? "Submitting…" : "Book Now"}</Text>
           </Pressable>
         </Animated.View>
       </View>
@@ -293,7 +294,7 @@ export default function ServiceDetailScreen() {
               style={styles.modalBtn}
               onPress={() => {
                 setShowModal(false);
-                router.replace("/(tabs)/wishlist");
+                router.replace({ pathname: "/(tabs)/wishlist", params: { tab: "bookings" } });
               }}
             >
               <Text style={styles.modalBtnText}>View My Bookings</Text>

@@ -81,6 +81,12 @@ pnpm typecheck
 pnpm build
 ```
 
+## Customer mobile milestone
+
+The customer application includes customer-only registration and login, marketplace browsing, product options, an account-specific offline cart and wishlist, saved delivery addresses, server-priced checkout, Wave handoff, order history and tracking, service booking, verified-purchase reviews, seven-day return/refund requests, notifications, support tickets, profile security, and in-app policy links.
+
+For an existing PostgreSQL deployment, apply `packages/database/migrations/customer_experience_migration.sql` before deploying this customer release. It adds return requests, product-option cart fields, and duplicate-protection indexes. New installations can use `pnpm db:push`.
+
 ## Wave Checkout
 
 The customer app and API include a server-side Wave Checkout integration. It is deliberately disabled by default because production activation requires a Wave Business wallet, Checkout API permission, an API key, separate signing secrets, webhook registration, and written confirmation that the wallet accepts `GMD` checkout sessions.

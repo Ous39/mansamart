@@ -140,7 +140,7 @@ export default function ProductDetailScreen() {
   const handleAddToCart = () => {
     if (!inStock) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    for (let i = 0; i < qty; i++) addToCart(product, { color: selectedColor ?? undefined, size: selectedSize ?? undefined, variant: product?.subcategory ?? undefined });
+    addToCart(product, { color: selectedColor ?? undefined, size: selectedSize ?? undefined, variant: product?.subcategory ?? undefined }, qty);
     apiRequest("POST", "/api/activity", { type: "cart", targetId: product.id, category: product.category }).catch(() => {});
     setAddedToCart(true);
     btnScale.value = withSpring(0.94, { damping: 10 }, () => { btnScale.value = withSpring(1); });

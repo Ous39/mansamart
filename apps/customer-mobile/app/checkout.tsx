@@ -9,6 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Alert,
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,6 +21,7 @@ import Colors from "@/constants/colors";
 import { useCart } from "@/contexts/CartContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiRequest } from "@/lib/query-client";
+import { useQuery } from "@tanstack/react-query";
 
 const paymentMethods = [
   { id: "wave", label: "Wave Mobile Money", icon: "phone-portrait-outline" },
@@ -34,6 +36,8 @@ export default function CheckoutScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [waveReady, setWaveReady] = useState<boolean | null>(null);
   const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState("");
 
   const [name, setName] = useState(user?.name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
@@ -45,6 +49,21 @@ export default function CheckoutScreen() {
   const total = calculateOrderTotal(subtotal, shipping);
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
 
+  const { data: savedAddresses = [] } = useQuery<any[]>({
+    queryKey: ["/api/addresses"],
+    enabled: !!user,
+  });
+
+  useEffect(() => {
+    if (selectedAddressId || savedAddresses.length === 0) return;
+    const saved = savedAddresses.find((item) => item.isDefault) || savedAddresses[0];
+    setSelectedAddressId(saved.id);
+    setName(saved.fullName);
+    setPhone(saved.phone);
+    setAddress(saved.address);
+    setCity(saved.city);
+  }, [savedAddresses, selectedAddressId]);
+
   useEffect(() => {
     apiRequest("GET", "/api/payments/config")
       .then((response) => response.json())
@@ -53,7 +72,18 @@ export default function CheckoutScreen() {
   }, []);
 
   const handlePlaceOrder = async () => {
-    if (!name || !phone || !address || !city) {
+    setValidationError("");
+    if (!user) {
+      router.push("/(auth)/login");
+      return;
+    }
+    if (items.length === 0) {
+      Alert.alert("Cart is empty", "Add an item before checking out.");
+      router.replace("/cart");
+      return;
+    }
+    if (name.trim().length < 2 || phone.trim().length < 7 || address.trim().length < 5 || city.trim().length < 2) {
+      setValidationError("Enter a full name, reachable phone number, street address, and city.");
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -73,9 +103,9 @@ export default function CheckoutScreen() {
               selectedOptions: options,
             };
           }),
-          address,
-          city,
-          phone: phone || user?.phone || "N/A",
+          address: address.trim(),
+          city: city.trim(),
+          phone: phone.trim(),
           paymentMethod,
           fulfillmentType,
           notes: fulfillmentType === "pickup" ? "Shopper will pickup from vendor" : "Home delivery requested",
@@ -96,8 +126,9 @@ export default function CheckoutScreen() {
       clearCart();
       router.replace({ pathname: "/payment-status", params: { paymentId: payment.id, orderId } });
     } catch (err: any) {
-      console.error("Place order failed", err);
-      alert(err?.message || "Order failed. Please check your connection and try again.");
+      const message = cleanError(err);
+      setValidationError(message);
+      Alert.alert("Checkout not completed", message);
     } finally {
       setIsLoading(false);
     }
@@ -126,6 +157,30 @@ export default function CheckoutScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <Text style={styles.sectionTitle}>Delivery Information</Text>
+          {savedAddresses.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.savedAddressRow}>
+              {savedAddresses.map((saved) => (
+                <Pressable
+                  key={saved.id}
+                  style={[styles.savedAddress, selectedAddressId === saved.id && styles.savedAddressSelected]}
+                  onPress={() => {
+                    setSelectedAddressId(saved.id);
+                    setName(saved.fullName);
+                    setPhone(saved.phone);
+                    setAddress(saved.address);
+                    setCity(saved.city);
+                    setValidationError("");
+                  }}
+                >
+                  <Ionicons name={saved.label === "Home" ? "home-outline" : "location-outline"} size={16} color={selectedAddressId === saved.id ? Colors.primary : Colors.textSecondary} />
+                  <View>
+                    <Text style={styles.savedAddressLabel}>{saved.label}{saved.isDefault ? " • Default" : ""}</Text>
+                    <Text style={styles.savedAddressText} numberOfLines={1}>{saved.address}, {saved.city}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
           <View style={styles.card}>
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Full Name</Text>
@@ -191,6 +246,13 @@ export default function CheckoutScreen() {
               </View>
             </View>
           </View>
+
+          {!!validationError && (
+            <View style={styles.errorBox}>
+              <Ionicons name="alert-circle-outline" size={18} color={Colors.error} />
+              <Text style={styles.errorText}>{validationError}</Text>
+            </View>
+          )}
 
 
           <Text style={styles.sectionTitle}>Fulfillment Option</Text>
@@ -295,6 +357,7 @@ export default function CheckoutScreen() {
               <Text style={styles.totalLabel}>Total</Text>
               <Text style={styles.totalValue}>D {total.toLocaleString()}</Text>
             </View>
+            <Text style={styles.verifiedTotal}>Prices, stock, fees, and the final total are verified again by MansaMart before Wave opens.</Text>
           </View>
         </ScrollView>
 
@@ -326,6 +389,11 @@ export default function CheckoutScreen() {
       </View>
     </KeyboardAvoidingView>
   );
+}
+
+function cleanError(error: any) {
+  const message = String(error?.message || "Please check your connection and try again.").replace(/^\d+:\s*/, "");
+  try { return JSON.parse(message).message || message; } catch { return message; }
 }
 
 const styles = StyleSheet.create({
@@ -366,6 +434,13 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
+  savedAddressRow: { gap: 9 },
+  savedAddress: { width: 220, flexDirection: "row", alignItems: "center", gap: 9, padding: 12, borderRadius: 13, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border },
+  savedAddressSelected: { borderColor: Colors.primary, backgroundColor: Colors.primaryLight },
+  savedAddressLabel: { fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.text },
+  savedAddressText: { width: 165, fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.textSecondary, marginTop: 2 },
+  errorBox: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 12, borderRadius: 12, backgroundColor: Colors.errorLight },
+  errorText: { flex: 1, fontSize: 12, lineHeight: 18, fontFamily: "Inter_500Medium", color: Colors.error },
   fieldGroup: {
     gap: 6,
   },
@@ -506,6 +581,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
     color: Colors.text,
   },
+  verifiedTotal: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular", color: Colors.textMuted, marginTop: 3 },
   bottomBar: {
     paddingHorizontal: 20,
     paddingTop: 16,

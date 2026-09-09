@@ -184,11 +184,11 @@ export default function ProfileScreen() {
         <View style={styles.menuSection}>
           <Text style={styles.menuSectionTitle}>Shopping</Text>
           <View style={styles.menuCard}>
-            <MenuItem icon="bag-outline" label="Shopping Orders" value="3 orders" onPress={() => router.push("/order-tracking")} />
+            <MenuItem icon="bag-outline" label="Shopping Orders" onPress={() => router.push({ pathname: "/(tabs)/wishlist", params: { tab: "history" } })} />
             <MenuItem icon="location-outline" label="Track Order" onPress={() => router.push("/order-tracking")} />
-            <MenuItem icon="calendar-outline" label="My Bookings" onPress={() => router.push("/(tabs)/wishlist")} />
-            <MenuItem icon="return-down-back-outline" label="Returns & Refunds" onPress={() => {}} />
-            <MenuItem icon="star-outline" label="My Reviews" onPress={() => {}} />
+            <MenuItem icon="calendar-outline" label="My Bookings" onPress={() => router.push({ pathname: "/(tabs)/wishlist", params: { tab: "bookings" } })} />
+            <MenuItem icon="return-down-back-outline" label="Returns & Refunds" onPress={() => router.push("/returns")} />
+            <MenuItem icon="star-outline" label="My Reviews" onPress={() => router.push("/my-reviews")} />
           </View>
         </View>
       )}
@@ -200,8 +200,8 @@ export default function ProfileScreen() {
           <MenuItem icon="settings-outline" label="Settings" onPress={() => router.push("/settings")} />
           <MenuItem icon="cube-outline" label="Track My Order" onPress={() => router.push("/order-tracking")} />
           <MenuItem icon="shield-outline" label="Privacy & Security" onPress={() => router.push("/settings")} />
-          <MenuItem icon="help-circle-outline" label="Help & Support" onPress={() => {}} />
-          <MenuItem icon="information-circle-outline" label="About MansaMart" value="v1.0.0" onPress={() => {}} />
+          <MenuItem icon="help-circle-outline" label="Help & Support" onPress={() => router.push("/support")} />
+          <MenuItem icon="information-circle-outline" label="About MansaMart" value="v2.0.0" onPress={() => router.push({ pathname: "/information", params: { page: "about" } })} />
         </View>
       </View>
 

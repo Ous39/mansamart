@@ -39,6 +39,10 @@ function RootLayoutNav() {
       <Stack.Screen name="order-tracking" options={{ headerShown: false }} />
         <Stack.Screen name="scan-order" options={{ headerShown: false }} />
       <Stack.Screen name="notifications" options={{ headerShown: false }} />
+      <Stack.Screen name="my-reviews" options={{ headerShown: false }} />
+      <Stack.Screen name="returns" options={{ headerShown: false }} />
+      <Stack.Screen name="support" options={{ headerShown: false }} />
+      <Stack.Screen name="information" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
       <Stack.Screen name="wallet" options={{ headerShown: false }} />
       <Stack.Screen name="pin-setup" options={{ headerShown: false, gestureEnabled: false }} />

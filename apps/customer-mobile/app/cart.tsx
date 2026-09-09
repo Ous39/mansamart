@@ -37,7 +37,7 @@ function CartItemRow({ item }: { item: CartItem }) {
             <Pressable
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                updateQuantity(item.product.id, item.quantity - 1);
+                updateQuantity(item, item.quantity - 1);
               }}
               style={styles.qtyBtn}
               hitSlop={8}
@@ -48,7 +48,7 @@ function CartItemRow({ item }: { item: CartItem }) {
             <Pressable
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                updateQuantity(item.product.id, item.quantity + 1);
+                updateQuantity(item, item.quantity + 1);
               }}
               style={styles.qtyBtn}
               hitSlop={8}
@@ -60,11 +60,16 @@ function CartItemRow({ item }: { item: CartItem }) {
             D {(item.product.price * item.quantity).toLocaleString()}
           </Text>
         </View>
+        {Object.keys(item.selectedOptions || {}).length > 0 && (
+          <Text style={styles.optionText} numberOfLines={2}>
+            {Object.entries(item.selectedOptions || {}).map(([key, value]) => `${key}: ${value}`).join(" • ")}
+          </Text>
+        )}
       </View>
       <Pressable
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          removeFromCart(item.product.id);
+          removeFromCart(item);
         }}
         style={styles.removeBtn}
         hitSlop={8}
@@ -117,7 +122,7 @@ export default function CartScreen() {
             showsVerticalScrollIndicator={false}
           >
             {items.map(item => (
-              <CartItemRow key={item.product.id} item={item} />
+              <CartItemRow key={`${item.product.id}:${item.optionKey}`} item={item} />
             ))}
 
             <View style={styles.summaryCard}>
@@ -272,6 +277,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Inter_700Bold",
     color: Colors.primary,
+  },
+  optionText: {
+    fontSize: 10,
+    fontFamily: "Inter_500Medium",
+    color: Colors.primary,
+    textTransform: "capitalize",
   },
   removeBtn: {
     padding: 10,

@@ -60,7 +60,8 @@
           "photosPermission": "Allow MansaMart to access photos for uploads.",
           "cameraPermission": "Allow MansaMart to use the camera for uploads and QR checks."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

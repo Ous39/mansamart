@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   pgTable, text, varchar, integer, boolean,
-  timestamp, real, jsonb, pgEnum
+  timestamp, real, jsonb, pgEnum, uniqueIndex
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -187,7 +187,9 @@ export const reviews = pgTable("reviews", {
   images: jsonb("images").$type<string[]>().default([]),
   verified: boolean("verified").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("idx_reviews_user_target").on(table.userId, table.targetType, table.targetId),
+]);
 
 export const cartItems = pgTable("cart_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -195,8 +197,14 @@ export const cartItems = pgTable("cart_items", {
   productId: varchar("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
   quantity: integer("quantity").notNull().default(1),
   selectedColor: text("selected_color"),
+  selectedSize: text("selected_size"),
+  selectedVariant: text("selected_variant"),
+  selectedOptions: jsonb("selected_options").$type<Record<string, any>>().default({}),
+  optionKey: text("option_key").notNull().default("{}"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("idx_cart_items_user_product_options").on(table.userId, table.productId, table.optionKey),
+]);
 
 export const wishlistItems = pgTable("wishlist_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -586,6 +594,23 @@ export const supportTickets = pgTable("support_tickets", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+export const returnRequests = pgTable("return_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  requestType: text("request_type").notNull().default("return"),
+  reason: text("reason").notNull(),
+  details: text("details"),
+  status: text("status").notNull().default("submitted"),
+  resolution: text("resolution"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_return_requests_one_active_per_order")
+    .on(table.userId, table.orderId)
+    .where(sql`${table.status} IN ('submitted', 'reviewing', 'approved')`),
+]);
 
 export const conversations = pgTable("conversations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
