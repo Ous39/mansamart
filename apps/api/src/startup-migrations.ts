@@ -1,4 +1,6 @@
 import { pool } from "./db";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 async function execSafe(sql: string, label: string) {
   try {
@@ -542,6 +544,13 @@ export async function runStartupMigrations() {
     CREATE INDEX IF NOT EXISTS idx_payment_webhook_events_session ON payment_webhook_events(provider_session_id);
     CREATE INDEX IF NOT EXISTS idx_payment_refunds_attempt ON payment_refunds(payment_attempt_id, created_at DESC);
   `, "Wave payment tables");
+
+  try {
+    const whatsappMigrationPath = fileURLToPath(new URL("../../../packages/database/migrations/whatsapp_commerce_migration.sql", import.meta.url));
+    await execSafe(readFileSync(whatsappMigrationPath, "utf8"), "WhatsApp commerce tables");
+  } catch (error: any) {
+    console.warn(`[startup-migration skipped] WhatsApp commerce migration file: ${error?.message || error}`);
+  }
 
   console.log("Database compatibility check completed.");
 }

@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   pgTable, text, varchar, integer, boolean,
-  timestamp, real, jsonb, pgEnum
+  timestamp, real, jsonb, pgEnum, uniqueIndex
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -739,6 +739,148 @@ export const auditLogs = pgTable("audit_logs", {
   metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+// ─── WHATSAPP COMMERCE ───────────────────────────────────────────────
+
+export const whatsappConnections = pgTable("whatsapp_connections", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  businessPhone: text("business_phone").notNull(),
+  displayName: text("display_name"),
+  wabaId: text("waba_id"),
+  phoneNumberId: text("phone_number_id"),
+  status: text("status").notNull().default("pending"),
+  aiEnabled: boolean("ai_enabled").notNull().default(true),
+  humanHandoffEnabled: boolean("human_handoff_enabled").notNull().default(true),
+  catalogSyncEnabled: boolean("catalog_sync_enabled").notNull().default(true),
+  welcomeMessage: text("welcome_message").default("Welcome to our MansaMart shop. What are you looking for today?"),
+  fallbackMessage: text("fallback_message").default("A member of the shop team will reply shortly."),
+  connectedAt: timestamp("connected_at"),
+  lastWebhookAt: timestamp("last_webhook_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  vendorUnique: uniqueIndex("whatsapp_connections_vendor_unique").on(table.vendorId),
+  phoneNumberIdUnique: uniqueIndex("whatsapp_connections_phone_number_id_unique").on(table.phoneNumberId),
+}));
+
+export const whatsappCustomers = pgTable("whatsapp_customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  phone: text("phone").notNull(),
+  displayName: text("display_name"),
+  optInStatus: text("opt_in_status").notNull().default("unknown"),
+  tags: jsonb("tags").$type<string[]>().default([]),
+  totalOrders: integer("total_orders").notNull().default(0),
+  totalSpent: integer("total_spent").notNull().default(0),
+  lastMessageAt: timestamp("last_message_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  vendorPhoneUnique: uniqueIndex("whatsapp_customers_vendor_phone_unique").on(table.vendorId, table.phone),
+}));
+
+export const whatsappThreads = pgTable("whatsapp_threads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  customerId: varchar("customer_id").notNull().references(() => whatsappCustomers.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("open"),
+  mode: text("mode").notNull().default("ai"),
+  unreadCount: integer("unread_count").notNull().default(0),
+  lastMessagePreview: text("last_message_preview"),
+  lastMessageAt: timestamp("last_message_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  vendorCustomerUnique: uniqueIndex("whatsapp_threads_vendor_customer_unique").on(table.vendorId, table.customerId),
+}));
+
+export const whatsappMessages = pgTable("whatsapp_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  threadId: varchar("thread_id").notNull().references(() => whatsappThreads.id, { onDelete: "cascade" }),
+  providerMessageId: text("provider_message_id"),
+  direction: text("direction").notNull(),
+  type: text("type").notNull().default("text"),
+  body: text("body"),
+  aiGenerated: boolean("ai_generated").notNull().default(false),
+  tokenUsage: integer("token_usage").notNull().default(0),
+  deliveryStatus: text("delivery_status").notNull().default("received"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  providerMessageUnique: uniqueIndex("whatsapp_messages_provider_message_unique").on(table.providerMessageId),
+}));
+
+export const whatsappCarts = pgTable("whatsapp_carts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  customerId: varchar("customer_id").notNull().references(() => whatsappCustomers.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").references(() => orders.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("active"),
+  items: jsonb("items").$type<{ productId: string; name: string; price: number; quantity: number; image?: string }[]>().default([]),
+  subtotal: integer("subtotal").notNull().default(0),
+  deliveryFee: integer("delivery_fee").notNull().default(0),
+  total: integer("total").notNull().default(0),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const whatsappCampaigns = pgTable("whatsapp_campaigns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  templateName: text("template_name"),
+  message: text("message").notNull(),
+  audience: jsonb("audience").$type<{ tags?: string[]; optInOnly?: boolean }>().default({ optInOnly: true }),
+  status: text("status").notNull().default("draft"),
+  recipientCount: integer("recipient_count").notNull().default(0),
+  sentCount: integer("sent_count").notNull().default(0),
+  deliveredCount: integer("delivered_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  scheduledAt: timestamp("scheduled_at"),
+  sentAt: timestamp("sent_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const aiTokenAccounts = pgTable("ai_token_accounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  balance: integer("balance").notNull().default(50000),
+  lifetimePurchased: integer("lifetime_purchased").notNull().default(0),
+  lifetimeUsed: integer("lifetime_used").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  vendorUnique: uniqueIndex("ai_token_accounts_vendor_unique").on(table.vendorId),
+}));
+
+export const aiUsageEvents = pgTable("ai_usage_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  threadId: varchar("thread_id").references(() => whatsappThreads.id, { onDelete: "set null" }),
+  messageId: varchar("message_id").references(() => whatsappMessages.id, { onDelete: "set null" }),
+  model: text("model").notNull().default("catalog-assistant"),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  totalTokens: integer("total_tokens").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const whatsappWebhookEvents = pgTable("whatsapp_webhook_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventId: text("event_id").notNull(),
+  phoneNumberId: text("phone_number_id"),
+  eventType: text("event_type").notNull(),
+  status: text("status").notNull().default("received"),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  failureMessage: text("failure_message"),
+  receivedAt: timestamp("received_at").notNull().defaultNow(),
+  processedAt: timestamp("processed_at"),
+}, (table) => ({
+  eventUnique: uniqueIndex("whatsapp_webhook_events_event_unique").on(table.eventId),
+}));
 
 // ─── INSERT SCHEMAS & TYPES ────────────────────────────────────────────────
 

@@ -22,6 +22,7 @@ import {
 import { z } from "zod";
 import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
 import { registerPaymentRoutes } from "./payments/routes";
+import { registerWhatsappRoutes } from "./whatsapp/routes";
 
 type RealtimePayload = Record<string, any>;
 type RealtimeEmitter = (event: string, payload: RealtimePayload, rooms?: string[]) => void;
@@ -459,6 +460,7 @@ async function computeProfileCompletion(user: any) {
 export async function registerRoutes(app: Express): Promise<Server> {
 
   registerPaymentRoutes(app);
+  registerWhatsappRoutes(app);
 
   // ────────────────────────────────────────────────────────────────
   // FILE UPLOADS - Expo/mobile friendly base64 image upload

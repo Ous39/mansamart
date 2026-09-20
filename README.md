@@ -101,6 +101,19 @@ https://api.mansamart.gm/api/webhooks/wave
 
 Set both `WAVE_ENABLED=true` and `WAVE_GMD_CONFIRMED=true` only after Wave confirms GMD support. The admin finance screen lists payment attempts and the API supports full Wave refunds with an audited administrator endpoint.
 
+## WhatsApp Commerce
+
+The MansaMart Business app now contains a WhatsApp Sales command centre. Vendors can register a WhatsApp Business number, sync their existing MansaMart catalogue, control AI and human handoff, review conversations and carts, and prepare opt-in campaigns. The first 50,000 AI tokens are created for each vendor account.
+
+The public webhook endpoints are:
+
+```text
+GET  https://api.mansamart.gm/api/webhooks/whatsapp
+POST https://api.mansamart.gm/api/webhooks/whatsapp
+```
+
+Apply `packages/database/migrations/whatsapp_commerce_migration.sql` before enabling the module. Configure `WHATSAPP_VERIFY_TOKEN` and `WHATSAPP_APP_SECRET` on the API server. Webhook payloads are rejected unless their Meta HMAC signature is valid. Keep `WHATSAPP_ENABLED=false` until the Meta Business app, WhatsApp Business Account and production phone number are approved.
+
 ## Production security checklist
 
 - Serve every domain over HTTPS.

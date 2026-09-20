@@ -24,6 +24,7 @@ export default function RoleLayout() {
       <Stack.Screen name="edit-product" />
       <Stack.Screen name="orders" />
       <Stack.Screen name="tools" />
+      <Stack.Screen name="whatsapp" />
       <Stack.Screen name="settings" />
     </Stack>
   );
