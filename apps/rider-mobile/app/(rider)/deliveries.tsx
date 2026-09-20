@@ -1,11 +1,12 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Linking, RefreshControl } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { apiRequest, queryClient } from "@/lib/query-client";
 import { safeBack } from "@/lib/navigation";
+import { RiderDeliveryMap } from "@/components/RiderDeliveryMap";
 
 function money(value?: number) {
   return `D ${(Number(value) || 0).toLocaleString()}`;
@@ -13,14 +14,6 @@ function money(value?: number) {
 
 function shortId(id?: string) {
   return String(id || "").slice(0, 8).toUpperCase() || "—";
-}
-
-function openMap(lat?: number, lng?: number, fallback?: string) {
-  if (lat != null && lng != null) {
-    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
-    return;
-  }
-  if (fallback) Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fallback)}`);
 }
 
 export default function RiderDeliveriesScreen() {
@@ -73,7 +66,7 @@ export default function RiderDeliveriesScreen() {
           {offers.length === 0 && <Text style={styles.empty}>No delivery offers right now.</Text>}
 
           <Text style={styles.sectionTitle}>Active deliveries</Text>
-          {active.map((d: any) => (
+          {active.map((d: any, index: number) => (
             <View key={d.id} style={styles.card}>
               <View style={styles.cardTop}>
                 <Text style={styles.cardTitle}>Order #{shortId(d.orderId)}</Text>
@@ -82,10 +75,16 @@ export default function RiderDeliveriesScreen() {
               <Text style={styles.meta}>Pickup: {d.pickupAddress || "Vendor location"}</Text>
               <Text style={styles.meta}>Drop-off: {d.dropoffAddress || "Shopper location"}</Text>
               <Text style={styles.meta}>Delivery fee: {money(d.deliveryFee)}</Text>
-              <View style={styles.actionRow}>
-                <Pressable style={styles.mapBtn} onPress={() => openMap(d.pickupLatitude, d.pickupLongitude, d.pickupAddress)}><Text style={styles.mapText}>Vendor map</Text></Pressable>
-                <Pressable style={styles.mapBtn} onPress={() => openMap(d.dropoffLatitude, d.dropoffLongitude, d.dropoffAddress)}><Text style={styles.mapText}>Shopper map</Text></Pressable>
-              </View>
+              <RiderDeliveryMap
+                pickupLatitude={d.pickupLatitude}
+                pickupLongitude={d.pickupLongitude}
+                pickupAddress={d.pickupAddress}
+                dropoffLatitude={d.dropoffLatitude}
+                dropoffLongitude={d.dropoffLongitude}
+                dropoffAddress={d.dropoffAddress}
+                status={d.status}
+                trackRider={index === 0}
+              />
               <Pressable style={styles.secondaryBtn} onPress={() => router.push(`/order/${d.orderId}` as any)}><Text style={styles.secondaryText}>View order details</Text></Pressable>
             </View>
           ))}
@@ -124,9 +123,6 @@ const styles = StyleSheet.create({
   meta: { fontFamily: "Inter_400Regular", color: Colors.textMuted, marginTop: 4, fontSize: 13 },
   acceptBtn: { backgroundColor: Colors.accent, borderRadius: 12, padding: 13, alignItems: "center", marginTop: 12 },
   acceptText: { color: "#fff", fontFamily: "Inter_700Bold" },
-  actionRow: { flexDirection: "row", gap: 10, marginTop: 14 },
-  mapBtn: { flex: 1, backgroundColor: Colors.primaryLight, borderRadius: 12, padding: 12, alignItems: "center" },
-  mapText: { color: Colors.primary, fontFamily: "Inter_700Bold" },
   secondaryBtn: { borderWidth: 1, borderColor: Colors.border, borderRadius: 12, padding: 12, alignItems: "center", marginTop: 10 },
   secondaryText: { color: Colors.text, fontFamily: "Inter_700Bold" },
   empty: { color: Colors.textMuted, textAlign: "center", marginBottom: 16, fontFamily: "Inter_500Medium" },
