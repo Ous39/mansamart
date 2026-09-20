@@ -227,6 +227,7 @@ export default function OrderDetailScreen() {
               <Text style={styles.infoText}>Drop-off: {tracking.delivery.dropoffAddress || `${order.address}, ${order.city}`}</Text>
             </View>
             <RiderDeliveryMap
+              deliveryId={tracking.delivery.id}
               pickupLatitude={tracking.delivery.pickupLatitude}
               pickupLongitude={tracking.delivery.pickupLongitude}
               pickupAddress={tracking.delivery.pickupAddress}

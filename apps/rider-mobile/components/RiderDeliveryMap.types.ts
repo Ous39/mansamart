@@ -1,4 +1,5 @@
 export interface RiderDeliveryMapProps {
+  deliveryId?: string | null;
   pickupLatitude?: number | null;
   pickupLongitude?: number | null;
   pickupAddress?: string | null;

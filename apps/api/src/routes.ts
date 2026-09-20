@@ -2582,7 +2582,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const events = await db.select().from(orderTrackingEvents).where(eq(orderTrackingEvents.orderId, orderId)).orderBy(desc(orderTrackingEvents.createdAt));
     const qrs = await db.select().from(orderQrCodes).where(eq(orderQrCodes.orderId, orderId)).orderBy(desc(orderQrCodes.createdAt));
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
-    const latestRiderLocation = delivery?.riderId ? await db.select().from(riderLocations).where(eq(riderLocations.riderId, delivery.riderId)).orderBy(desc(riderLocations.createdAt)).limit(1) : [];
+    const latestRiderLocation = delivery?.riderId ? await db.select().from(riderLocations).where(and(eq(riderLocations.riderId, delivery.riderId), eq(riderLocations.deliveryId, delivery.id))).orderBy(desc(riderLocations.createdAt)).limit(1) : [];
     return res.json({ order, events, qrs, delivery: delivery || null, riderLocation: latestRiderLocation[0] || null });
   });
 
@@ -2812,8 +2812,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/rider/location", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const { latitude, longitude, accuracy, heading, speed, deliveryId } = z.object({ latitude: z.number(), longitude: z.number(), accuracy: z.number().optional(), heading: z.number().optional(), speed: z.number().optional(), deliveryId: z.string().optional() }).parse(req.body);
-    const [loc] = await db.insert(riderLocations).values({ riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed }).returning();
+    const { latitude, longitude, accuracy, heading, speed, deliveryId, recordedAt } = z.object({ latitude: z.number(), longitude: z.number(), accuracy: z.number().optional(), heading: z.number().optional(), speed: z.number().optional(), deliveryId: z.string().optional(), recordedAt: z.coerce.date().optional() }).parse(req.body);
+    if (deliveryId) {
+      const [assignedDelivery] = await db.select({ id: deliveries.id }).from(deliveries).where(and(eq(deliveries.id, deliveryId), eq(deliveries.riderId, user.id))).limit(1);
+      if (!assignedDelivery) return res.status(403).json({ message: "This delivery is not assigned to the rider" });
+    }
+    const [loc] = await db.insert(riderLocations).values({ riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed, ...(recordedAt ? { createdAt: recordedAt } : {}) }).returning();
     await db.update(deliveryRiders).set({ latitude, longitude, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
     emitRealtime("rider:location", { riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed, createdAt: loc.createdAt }, deliveryId ? [`delivery:${deliveryId}`, "role:admin"] : ["role:admin"]);
     return res.status(201).json(loc);

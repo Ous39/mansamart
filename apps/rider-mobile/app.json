@@ -51,7 +51,10 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow MansaMart to use your location during active deliveries."
+          "locationAlwaysAndWhenInUsePermission": "Allow MansaMart to share your route with the customer during an active delivery.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [

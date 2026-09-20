@@ -70,6 +70,7 @@ export default function RiderDeliveriesScreen() {
               <Text style={styles.meta}>Drop-off: {d.dropoffAddress || "Shopper location"}</Text>
               <Text style={styles.meta}>Delivery fee: {money(d.deliveryFee)}</Text>
               <RiderDeliveryMap
+                deliveryId={d.id}
                 pickupLatitude={d.pickupLatitude}
                 pickupLongitude={d.pickupLongitude}
                 pickupAddress={d.pickupAddress}

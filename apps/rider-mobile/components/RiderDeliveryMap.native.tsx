@@ -5,6 +5,7 @@ import * as Location from "expo-location";
 import MapView, { Marker, PROVIDER_GOOGLE, type LatLng } from "react-native-maps";
 import Colors from "@/constants/colors";
 import { hasCoords, openNavigation } from "@/lib/maps";
+import { flushPendingDeliveryLocation, payloadFromLocation, queueDeliveryLocation, startBackgroundDeliveryTracking, stopBackgroundDeliveryTracking } from "@/lib/delivery-location";
 import type { RiderDeliveryMapProps } from "./RiderDeliveryMap.types";
 
 type Stop = LatLng & { key: "pickup" | "dropoff"; title: string; description?: string };
@@ -42,13 +43,14 @@ export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
   const nextAddress = headingToShopper ? props.dropoffAddress : props.pickupAddress;
 
   useEffect(() => {
-    if (props.trackRider === false) {
+    if (props.trackRider === false || !props.deliveryId) {
       setLocationMessage("Open the next stop in Google Maps for turn-by-turn directions.");
       return;
     }
 
     let subscription: Location.LocationSubscription | undefined;
     let mounted = true;
+    const deliveryId = props.deliveryId;
 
     async function startLocation() {
       const permission = await Location.requestForegroundPermissionsAsync();
@@ -60,23 +62,41 @@ export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
 
       subscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.Balanced, timeInterval: 5000, distanceInterval: 10 },
-        ({ coords }) => {
+        (location) => {
+          const { coords } = location;
           if (!mounted) return;
           setRiderLocation({ latitude: coords.latitude, longitude: coords.longitude });
-          setLocationMessage("Your live position is shown in blue.");
+          queueDeliveryLocation(payloadFromLocation(deliveryId, location)).then((synced) => {
+            if (mounted) setLocationMessage(synced ? "Live location is being shared with the customer." : "Poor connection — your latest location is saved and will sync automatically.");
+          });
         },
       );
+
+      startBackgroundDeliveryTracking(deliveryId).catch(() => false);
     }
 
     startLocation().catch(() => {
       if (mounted) setLocationMessage("Live location is unavailable. Google Maps navigation still works.");
     });
 
+    const retryTimer = setInterval(() => {
+      flushPendingDeliveryLocation().then((synced) => {
+        if (mounted && synced) setLocationMessage("Live location is being shared with the customer.");
+      });
+    }, 15_000);
+
     return () => {
       mounted = false;
+      clearInterval(retryTimer);
       subscription?.remove();
     };
-  }, [props.trackRider]);
+  }, [props.deliveryId, props.trackRider]);
+
+  useEffect(() => {
+    if (["delivered", "completed", "cancelled"].includes(String(props.status))) {
+      stopBackgroundDeliveryTracking().catch(() => {});
+    }
+  }, [props.status]);
 
   const fitRoute = () => {
     const points = [...stops, ...(riderLocation ? [riderLocation] : [])];
@@ -138,6 +158,7 @@ export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
           <Ionicons name="navigate-circle" size={34} color={Colors.primary} />
         </View>
         <Text style={styles.message}>{locationMessage}</Text>
+        <Text style={styles.offlineHint}>For weak signal areas, download The Gambia in Google Maps Offline Maps before starting deliveries.</Text>
         <View style={styles.legend}>
           <Legend color="#E8813A" label="Pickup" />
           <Legend color="#E63946" label="Drop-off" />
@@ -181,6 +202,7 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 10, fontWeight: "800", letterSpacing: 1, color: Colors.primary },
   title: { marginTop: 3, fontSize: 15, fontWeight: "800", color: Colors.text },
   message: { marginTop: 5, color: Colors.textMuted, fontSize: 12, lineHeight: 18 },
+  offlineHint: { marginTop: 6, color: "#7C5C18", backgroundColor: "#FFFBEB", borderRadius: 9, padding: 8, fontSize: 11, lineHeight: 16 },
   legend: { flexDirection: "row", gap: 14, marginTop: 10 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },

@@ -26,6 +26,7 @@ export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
         <Text style={styles.eyebrow}>GOOGLE MAPS</Text>
         <Text style={styles.title}>Next stop: {nextStop}</Text>
         <Text style={styles.subtitle}>{address || "Location coordinates will appear when available."}</Text>
+        <Text style={styles.offlineHint}>Poor signal: Google Maps can use a previously downloaded offline area.</Text>
         <Pressable
           disabled={!available}
           onPress={() => openNavigation(latitude, longitude, `${nextStop} location`, address || undefined)}
@@ -49,6 +50,7 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 10, fontWeight: "800", letterSpacing: 1, color: Colors.primary },
   title: { marginTop: 3, fontSize: 15, fontWeight: "800", color: Colors.text },
   subtitle: { marginTop: 4, color: Colors.textMuted, fontSize: 12, lineHeight: 18 },
+  offlineHint: { marginTop: 6, color: "#7C5C18", fontSize: 11, lineHeight: 16 },
   button: { marginTop: 12, minHeight: 44, borderRadius: 12, backgroundColor: Colors.primary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 12 },
   buttonDisabled: { backgroundColor: "#CBD5E1" },
   buttonText: { color: "#fff", fontWeight: "800", fontSize: 13 },
