@@ -1,0 +1,106 @@
+name: mansamart
+
+x-app: &app
+  build:
+    context: ..
+    dockerfile: infrastructure/docker/Dockerfile
+  working_dir: /workspace
+  volumes:
+    - ..:/workspace
+    - workspace_node_modules:/workspace/node_modules
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mansamart-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mansamart
+      POSTGRES_USER: mansamart
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mansamart-local-only}
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mansamart -d mansamart"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    <<: *app
+    container_name: mansamart-api
+    command: ["sh", "infrastructure/docker/api-start.sh"]
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 5000
+      DATABASE_URL: postgres://mansamart:${POSTGRES_PASSWORD:-mansamart-local-only}@postgres:5432/mansamart
+      PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
+      CORS_ORIGINS: http://localhost:4173,http://localhost:4174,http://localhost:8081,http://localhost:8082,http://localhost:8083
+      ADMIN_CORS_ORIGINS: http://localhost:4174
+      SEED_ON_START: ${SEED_ON_START:-true}
+      WAVE_ENABLED: ${WAVE_ENABLED:-false}
+      WAVE_GMD_CONFIRMED: ${WAVE_GMD_CONFIRMED:-false}
+      WAVE_API_BASE_URL: https://api.wave.com
+      WAVE_API_KEY: ${WAVE_API_KEY:-}
+      WAVE_REQUEST_SIGNING_SECRET: ${WAVE_REQUEST_SIGNING_SECRET:-}
+      WAVE_WEBHOOK_SECRET: ${WAVE_WEBHOOK_SECRET:-}
+      WAVE_CURRENCY: ${WAVE_CURRENCY:-GMD}
+      WAVE_SUCCESS_URL: https://mansamart.gm/payment/wave/success
+      WAVE_ERROR_URL: https://mansamart.gm/payment/wave/error
+    ports: ["5000:5000"]
+    volumes:
+      - ..:/workspace
+      - workspace_node_modules:/workspace/node_modules
+      - api_uploads:/workspace/apps/api/uploads
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  customer-mobile:
+    <<: *app
+    command: ["sh", "infrastructure/docker/expo-start.sh"]
+    environment:
+      APP_PACKAGE: "@mansamart/customer-mobile"
+      EXPO_PUBLIC_APP_AUDIENCE: customer
+      EXPO_PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
+    ports: ["8081:8081"]
+    depends_on: [api]
+
+  business-mobile:
+    <<: *app
+    command: ["sh", "infrastructure/docker/expo-start.sh"]
+    environment:
+      APP_PACKAGE: "@mansamart/business-mobile"
+      EXPO_PUBLIC_APP_AUDIENCE: business
+      EXPO_PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
+    ports: ["8082:8082"]
+    depends_on: [api]
+
+  rider-mobile:
+    <<: *app
+    command: ["sh", "infrastructure/docker/expo-start.sh"]
+    environment:
+      APP_PACKAGE: "@mansamart/rider-mobile"
+      EXPO_PUBLIC_APP_AUDIENCE: rider
+      EXPO_PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
+    ports: ["8083:8083"]
+    depends_on: [api]
+
+  web:
+    <<: *app
+    command: ["pnpm", "--filter", "@mansamart/web", "dev"]
+    environment: { VITE_API_URL: "http://localhost:5000" }
+    ports: ["4173:4173"]
+    depends_on: [api]
+
+  admin-web:
+    <<: *app
+    command: ["pnpm", "--filter", "@mansamart/admin-web", "dev"]
+    environment: { VITE_API_URL: "http://localhost:5000" }
+    ports: ["4174:4174"]
+    depends_on: [api]
+
+volumes:
+  postgres_data:
+  workspace_node_modules:
+  api_uploads:
