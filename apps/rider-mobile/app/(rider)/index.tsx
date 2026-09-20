@@ -15,10 +15,6 @@ export default function RiderDashboard() {
     mutationFn: async () => apiRequest("PUT", "/api/rider/status", { isOnline: !data?.profile?.isOnline, isAvailable: true }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/rider/dashboard"] }),
   });
-  const accept = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/delivery-requests/${id}/accept`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/rider/dashboard"] }),
-  });
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}><Pressable onPress={() => safeBack("/")}><Ionicons name="close" size={24} color={Colors.text} /></Pressable><Text style={styles.title}>Rider Dashboard</Text><Pressable onPress={() => router.push("/(rider)/settings")}><Ionicons name="person-circle-outline" size={26} color={Colors.primary} /></Pressable></View>
@@ -41,7 +37,7 @@ export default function RiderDashboard() {
           <View key={offer.id} style={styles.card}>
             <Text style={styles.cardTitle}>New delivery request</Text>
             <Text style={styles.cardSub}>Distance: {offer.distanceKm ? offer.distanceKm.toFixed(2) : "—"} km</Text>
-            <Pressable style={styles.acceptBtn} onPress={() => accept.mutate(offer.id)}><Text style={styles.acceptText}>Accept Delivery</Text></Pressable>
+            <Pressable style={styles.acceptBtn} onPress={() => router.push(`/delivery-offer/${offer.id}` as any)}><Text style={styles.acceptText}>Review Order</Text></Pressable>
           </View>
         ))}
         {(!data?.offers || data.offers.length === 0) && <Text style={styles.empty}>No delivery offers right now.</Text>}

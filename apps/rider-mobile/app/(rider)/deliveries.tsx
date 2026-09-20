@@ -2,9 +2,8 @@ import React from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
-import { apiRequest, queryClient } from "@/lib/query-client";
 import { safeBack } from "@/lib/navigation";
 import { RiderDeliveryMap } from "@/components/RiderDeliveryMap";
 
@@ -18,11 +17,6 @@ function shortId(id?: string) {
 
 export default function RiderDeliveriesScreen() {
   const { data, isLoading, refetch, isFetching } = useQuery<any>({ queryKey: ["/api/rider/dashboard"], refetchInterval: 10000 });
-  const accept = useMutation({
-    mutationFn: async (id: string) => apiRequest("POST", `/api/delivery-requests/${id}/accept`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/rider/dashboard"] }),
-  });
-
   const offers = data?.offers ?? [];
   const active = data?.activeDeliveries ?? [];
   const history = data?.history ?? [];
@@ -58,8 +52,8 @@ export default function RiderDeliveriesScreen() {
               </View>
               <Text style={styles.meta}>Distance: {offer.distanceKm ? `${Number(offer.distanceKm).toFixed(2)} km` : "Not calculated"}</Text>
               <Text style={styles.meta}>Expires: {offer.expiresAt ? new Date(offer.expiresAt).toLocaleString() : "Soon"}</Text>
-              <Pressable disabled={accept.isPending} style={styles.acceptBtn} onPress={() => accept.mutate(offer.id)}>
-                <Text style={styles.acceptText}>{accept.isPending ? "Accepting..." : "Accept delivery"}</Text>
+              <Pressable style={styles.acceptBtn} onPress={() => router.push(`/delivery-offer/${offer.id}` as any)}>
+                <Text style={styles.acceptText}>Review full order details</Text>
               </Pressable>
             </View>
           ))}

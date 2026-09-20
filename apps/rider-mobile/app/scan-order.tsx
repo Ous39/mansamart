@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import { View, Text, StyleSheet, Pressable, TextInput, ActivityIndicator, Alert } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { apiRequest, queryClient } from "@/lib/query-client";
 import { safeBack } from "@/lib/navigation";
 
 export default function ScanOrderScreen() {
+  const { orderId, purpose } = useLocalSearchParams<{ orderId?: string; purpose?: "pickup" | "delivery" }>();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -20,14 +21,22 @@ export default function ScanOrderScreen() {
     setLoading(true);
     setResult(null);
     try {
-      const res = await apiRequest("POST", "/api/orders/verify-qr", { code: cleanCode });
+      const endpoint = orderId && purpose
+        ? `/api/orders/${orderId}/confirm-${purpose}-qr`
+        : "/api/orders/verify-qr";
+      const res = await apiRequest("POST", endpoint, { code: cleanCode });
       const data = await res.json();
       setResult(data);
       setCode("");
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/rider/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
-      Alert.alert("Verified", data.message || "Order QR verification completed.");
+      const message = purpose === "pickup"
+        ? "Vendor pickup confirmed. Customer navigation is now unlocked."
+        : purpose === "delivery"
+          ? "Customer delivery confirmed."
+          : data.message || "Order QR verification completed.";
+      Alert.alert("Verified", message);
     } catch (err: any) {
       Alert.alert("Verification failed", err?.message || "Invalid, expired, or already used QR code.");
     } finally {
@@ -41,7 +50,7 @@ export default function ScanOrderScreen() {
         <Pressable onPress={() => safeBack("/")} hitSlop={8} style={styles.iconBtn}>
           <Ionicons name="arrow-back" size={23} color={Colors.text} />
         </Pressable>
-        <Text style={styles.title}>Scan Order</Text>
+        <Text style={styles.title}>{purpose === "pickup" ? "Confirm Pickup" : purpose === "delivery" ? "Confirm Delivery" : "Scan Order"}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -49,8 +58,8 @@ export default function ScanOrderScreen() {
         <View style={styles.scanCircle}>
           <Ionicons name="scan-outline" size={54} color={Colors.primary} />
         </View>
-        <Text style={styles.heroTitle}>Order QR Verification</Text>
-        <Text style={styles.heroText}>Use this for vendor-to-rider pickup and rider-to-shopper delivery confirmation.</Text>
+        <Text style={styles.heroTitle}>{purpose === "pickup" ? "Vendor Handover" : purpose === "delivery" ? "Customer Handover" : "Order QR Verification"}</Text>
+        <Text style={styles.heroText}>{purpose === "pickup" ? "Enter the vendor's pickup code. Customer navigation unlocks only after successful confirmation." : purpose === "delivery" ? "Enter the customer's delivery code to confirm the order arrived safely." : "Use this for vendor-to-rider pickup and rider-to-shopper delivery confirmation."}</Text>
       </View>
 
       <View style={styles.card}>
@@ -59,7 +68,7 @@ export default function ScanOrderScreen() {
           style={styles.input}
           value={code}
           onChangeText={setCode}
-          placeholder="Paste or type QR code"
+          placeholder={purpose === "pickup" ? "Enter vendor pickup code" : purpose === "delivery" ? "Enter customer delivery code" : "Paste or type QR code"}
           placeholderTextColor={Colors.textMuted}
           autoCapitalize="characters"
         />
@@ -73,7 +82,7 @@ export default function ScanOrderScreen() {
           <Text style={styles.resultTitle}>{result.message || "Order verified"}</Text>
           <Text style={styles.resultText}>Status: {String(result.order.status || "updated").replace(/_/g, " ")}</Text>
           <Pressable style={styles.secondaryBtn} onPress={() => router.push(`/order/${result.order.id}` as any)}>
-            <Text style={styles.secondaryText}>Open Order Tracking</Text>
+            <Text style={styles.secondaryText}>{purpose === "pickup" ? "Continue to customer map" : "Open Order Tracking"}</Text>
           </Pressable>
         </View>
       ) : null}

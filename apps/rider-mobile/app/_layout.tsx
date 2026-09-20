@@ -27,7 +27,8 @@ function RootLayoutNav() {
         options={{ headerShown: false, presentation: "modal" }}
       />
       <Stack.Screen name="order-tracking" options={{ headerShown: false }} />
-        <Stack.Screen name="scan-order" options={{ headerShown: false }} />
+      <Stack.Screen name="delivery-offer/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="scan-order" options={{ headerShown: false }} />
       <Stack.Screen name="notifications" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
       <Stack.Screen name="wallet" options={{ headerShown: false }} />

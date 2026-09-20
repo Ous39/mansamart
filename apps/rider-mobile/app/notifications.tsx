@@ -38,6 +38,7 @@ const TYPE_META: Record<string, { icon: string; color: string; bg: string }> = {
   system:       { icon: "information-circle-outline",color: "#64748B", bg: "#F1F5F9" },
   alert:        { icon: "alert-circle-outline",      color: "#E63946", bg: "#FEF2F2" },
   review:       { icon: "star-outline",              color: "#F59E0B", bg: "#FFFBEB" },
+  delivery:     { icon: "bicycle-outline",           color: "#E8813A", bg: "#FFF3E9" },
 };
 
 function NotifCard({ item, onPress }: { item: any; onPress: () => void }) {
@@ -156,7 +157,10 @@ export default function NotificationsScreen() {
           renderItem={({ item }) => (
             <NotifCard
               item={item}
-              onPress={() => { if (!item.isRead) markRead.mutate(item.id); }}
+              onPress={() => {
+                if (!item.isRead) markRead.mutate(item.id);
+                if (item.actionRoute) router.push(item.actionRoute as any);
+              }}
             />
           )}
         />

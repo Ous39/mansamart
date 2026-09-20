@@ -6,7 +6,7 @@ import { hasCoords, openNavigation } from "@/lib/maps";
 import type { RiderDeliveryMapProps } from "./RiderDeliveryMap.types";
 
 export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
-  const headingToShopper = ["picked_up", "on_the_way"].includes(String(props.status));
+  const headingToShopper = ["picked_up", "on_the_way", "in_transit"].includes(String(props.status));
   const latitude = headingToShopper ? props.dropoffLatitude : props.pickupLatitude;
   const longitude = headingToShopper ? props.dropoffLongitude : props.pickupLongitude;
   const address = headingToShopper ? props.dropoffAddress : props.pickupAddress;

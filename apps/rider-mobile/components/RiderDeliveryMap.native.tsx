@@ -13,7 +13,7 @@ export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
   const mapRef = useRef<MapView>(null);
   const [riderLocation, setRiderLocation] = useState<LatLng | null>(null);
   const [locationMessage, setLocationMessage] = useState("Finding your live location…");
-  const headingToShopper = ["picked_up", "on_the_way"].includes(String(props.status));
+  const headingToShopper = ["picked_up", "on_the_way", "in_transit"].includes(String(props.status));
 
   const stops = useMemo<Stop[]>(() => {
     const result: Stop[] = [];

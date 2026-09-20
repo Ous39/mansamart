@@ -2457,7 +2457,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const user = (req as any).user;
     const profile = await ensureRiderProfile(user);
     const activeDeliveries = await db.select().from(deliveries).where(eq(deliveries.riderId, user.id)).orderBy(desc(deliveries.createdAt)).limit(20);
-    const offers = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered"))).orderBy(desc(deliveryRequests.createdAt)).limit(20);
+    const offers = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered"), gt(deliveryRequests.expiresAt, new Date()))).orderBy(desc(deliveryRequests.createdAt)).limit(20);
     const completion = await computeProfileCompletion(user);
     return res.json({ profile, activeDeliveries, offers, completion });
   });
@@ -2478,8 +2478,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const riders = await db.select().from(deliveryRiders).where(and(eq(deliveryRiders.isOnline, true), eq(deliveryRiders.isAvailable, true), eq(deliveryRiders.verificationStatus, "verified")));
       const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, pickupLatitude, pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
       for (const rider of nearest) {
-        await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 60_000) });
-        await db.insert(notifications).values({ userId: rider.userId, type: "delivery", title: "New Delivery Request", body: `Pickup: ${pickupAddress}. Fee: D ${deliveryFee.toLocaleString()}`, icon: "bicycle-outline", color: "#E8813A", actionRoute: "/(rider)/" });
+        const [deliveryRequest] = await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 5 * 60_000) }).returning();
+        await notifyUser(rider.userId, "delivery", "New Delivery Request", `Pickup: ${pickupAddress}. Fee: D ${deliveryFee.toLocaleString()}`, `/delivery-offer/${deliveryRequest.id}`, { deliveryId: delivery.id, orderId, requestId: deliveryRequest.id });
       }
       await db.update(orders).set({ status: "rider_searching" as any, updatedAt: new Date() }).where(eq(orders.id, orderId));
       return res.status(201).json({ delivery, offeredRiders: nearest.length });
@@ -2493,6 +2493,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const user = (req as any).user;
     const [request] = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.id, param(req, "id")), eq(deliveryRequests.riderId, user.id))).limit(1);
     if (!request || request.status !== "offered") return res.status(404).json({ message: "Delivery offer not available" });
+    if (request.expiresAt && request.expiresAt.getTime() <= Date.now()) {
+      await db.update(deliveryRequests).set({ status: "expired", respondedAt: new Date() }).where(eq(deliveryRequests.id, request.id));
+      return res.status(410).json({ message: "Delivery offer expired" });
+    }
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, request.deliveryId)).limit(1);
     if (!delivery || delivery.status !== "searching") return res.status(400).json({ message: "Delivery already assigned" });
     await db.update(deliveryRequests).set({ status: "cancelled" }).where(eq(deliveryRequests.deliveryId, delivery.id));
@@ -2501,6 +2505,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await db.update(deliveryRiders).set({ isAvailable: false, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
     await db.update(orders).set({ status: "rider_assigned" as any, updatedAt: new Date() }).where(eq(orders.id, delivery.orderId));
     return res.json({ request: acceptedReq, delivery: updatedDelivery });
+  });
+
+  app.get("/api/delivery-requests/:id", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const [request] = await db.select().from(deliveryRequests).where(eq(deliveryRequests.id, param(req, "id"))).limit(1);
+    if (!request) return res.status(404).json({ message: "Delivery offer not found" });
+    if (user.role !== "admin" && request.riderId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, request.deliveryId)).limit(1);
+    if (!delivery) return res.status(404).json({ message: "Delivery not found" });
+    const [order] = await db.select().from(orders).where(eq(orders.id, delivery.orderId)).limit(1);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+    return res.json({ request, delivery, order });
   });
 
   app.put("/api/delivery/:id/status", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
@@ -2660,8 +2676,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const riders = await db.select().from(deliveryRiders).where(and(eq(deliveryRiders.isOnline, true), eq(deliveryRiders.isAvailable, true), eq(deliveryRiders.verificationStatus, "verified")));
       const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, body.pickupLatitude, body.pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
       for (const rider of nearest) {
-        await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 60_000) });
-        await notifyUser(rider.userId, "delivery", "New Delivery Request", `Pickup: ${pickupAddress}. Fee: D ${delivery.deliveryFee.toLocaleString()}`, "/(rider)", { deliveryId: delivery.id, orderId: order.id });
+        const [deliveryRequest] = await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 5 * 60_000) }).returning();
+        await notifyUser(rider.userId, "delivery", "New Delivery Request", `Pickup: ${pickupAddress}. Fee: D ${delivery.deliveryFee.toLocaleString()}`, `/delivery-offer/${deliveryRequest.id}`, { deliveryId: delivery.id, orderId: order.id, requestId: deliveryRequest.id });
       }
       const [updated] = await db.update(orders).set({ status: "searching_rider" as any, fulfillmentType: "delivery", updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
       await addTracking(order.id, "searching_rider", "Searching for rider", `${nearest.length} riders were notified.`, user, { deliveryId: delivery.id, offeredRiders: nearest.length });
@@ -2677,6 +2693,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const user = (req as any).user;
     const [request] = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.id, param(req, "id")), eq(deliveryRequests.riderId, user.id))).limit(1);
     if (!request || request.status !== "offered") return res.status(404).json({ message: "Delivery offer not available" });
+    if (request.expiresAt && request.expiresAt.getTime() <= Date.now()) {
+      await db.update(deliveryRequests).set({ status: "expired", respondedAt: new Date() }).where(eq(deliveryRequests.id, request.id));
+      return res.status(410).json({ message: "Delivery offer expired" });
+    }
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, request.deliveryId)).limit(1);
     if (!delivery || delivery.status !== "searching") return res.status(400).json({ message: "Delivery already assigned" });
     await db.update(deliveryRequests).set({ status: "cancelled" }).where(eq(deliveryRequests.deliveryId, delivery.id));
@@ -2781,7 +2801,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/rider/dashboard", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const profile = await ensureRiderProfile(user);
-    const offers = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered"))).orderBy(desc(deliveryRequests.createdAt)).limit(30);
+    const offers = await db.select().from(deliveryRequests).where(and(eq(deliveryRequests.riderId, user.id), eq(deliveryRequests.status, "offered"), gt(deliveryRequests.expiresAt, new Date()))).orderBy(desc(deliveryRequests.createdAt)).limit(30);
     const activeDeliveries = await db.select().from(deliveries).where(and(eq(deliveries.riderId, user.id), ne(deliveries.status, "delivered"), ne(deliveries.status, "cancelled"))).orderBy(desc(deliveries.createdAt)).limit(30);
     const history = await db.select().from(deliveries).where(eq(deliveries.riderId, user.id)).orderBy(desc(deliveries.createdAt)).limit(50);
     const earningRows = await db.select().from(riderEarnings).where(eq(riderEarnings.riderId, user.id)).orderBy(desc(riderEarnings.createdAt)).limit(50);
