@@ -116,8 +116,24 @@ export interface TrackingResponse {
   order: Order;
   events: Array<{ id: string; title: string; message: string; status: string; createdAt: string }>;
   qrs: Array<{ id: string; purpose: string; code: string; status: string }>;
-  delivery?: Record<string, unknown> | null;
+  delivery?: {
+    id: string;
+    status: string;
+    pickupAddress: string;
+    pickupLatitude?: number | null;
+    pickupLongitude?: number | null;
+    dropoffAddress: string;
+    dropoffLatitude?: number | null;
+    dropoffLongitude?: number | null;
+  } | null;
   riderLocation?: { latitude: number; longitude: number; createdAt: string } | null;
+  progress?: {
+    headingTo: "pickup" | "dropoff";
+    remainingDistanceKm?: number | null;
+    etaMinutes?: number | null;
+    lastUpdatedAt?: string | null;
+    isStale: boolean;
+  };
 }
 
 export interface PaymentConfig {

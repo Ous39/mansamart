@@ -5,7 +5,7 @@ import Colors from "@/constants/colors";
 import { hasCoords, openMap } from "@/lib/maps";
 import type { CustomerDeliveryMapProps } from "./CustomerDeliveryMap.types";
 
-export function CustomerDeliveryMap({ riderLocation, status }: CustomerDeliveryMapProps) {
+export function CustomerDeliveryMap({ riderLocation, status, progress }: CustomerDeliveryMapProps) {
   const available = hasCoords(riderLocation?.latitude, riderLocation?.longitude);
   const updatedAt = riderLocation?.createdAt ? new Date(riderLocation.createdAt) : null;
   const stale = !updatedAt || Date.now() - updatedAt.getTime() > 60_000;
@@ -22,6 +22,7 @@ export function CustomerDeliveryMap({ riderLocation, status }: CustomerDeliveryM
         <View style={styles.statusRow}><View style={[styles.dot, stale && !finished && styles.dotStale]} /><Text style={styles.status}>{finished ? "Delivery completed" : stale ? "Last known rider position" : "Rider location live"}</Text></View>
         <Text style={styles.title}>{finished ? "Order delivered" : pickedUp ? "Your order is on the way" : "Rider is heading to the vendor"}</Text>
         <Text style={styles.sub}>{updatedAt ? `Last update: ${updatedAt.toLocaleTimeString()}` : "Waiting for the rider's first location update."}</Text>
+        {(progress?.remainingDistanceKm != null || progress?.etaMinutes != null) && <Text style={styles.eta}>{progress?.remainingDistanceKm != null ? `${progress.remainingDistanceKm.toFixed(1)} km remaining` : ""}{progress?.remainingDistanceKm != null && progress?.etaMinutes != null ? " · " : ""}{progress?.etaMinutes != null ? `about ${progress.etaMinutes} min` : ""}</Text>}
         <Pressable disabled={!available} style={[styles.button, !available && styles.disabled]} onPress={() => openMap(riderLocation?.latitude, riderLocation?.longitude, "Rider's last known location")}>
           <Ionicons name="map-outline" size={17} color="#fff" /><Text style={styles.buttonText}>Open last location in Google Maps</Text>
         </Pressable>
@@ -43,6 +44,7 @@ const styles = StyleSheet.create({
   status: { fontSize: 10, letterSpacing: 0.7, fontWeight: "800", color: Colors.textMuted, textTransform: "uppercase" },
   title: { marginTop: 5, color: Colors.text, fontWeight: "800", fontSize: 15 },
   sub: { marginTop: 4, color: Colors.textMuted, fontSize: 12, lineHeight: 18 },
+  eta: { marginTop: 7, color: Colors.primary, fontSize: 12, fontWeight: "800" },
   button: { marginTop: 12, minHeight: 44, borderRadius: 12, backgroundColor: Colors.primary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   disabled: { backgroundColor: "#CBD5E1" },
   buttonText: { color: "#fff", fontWeight: "800", fontSize: 12 },

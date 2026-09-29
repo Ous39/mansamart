@@ -40,6 +40,8 @@ import {
   canVerifyOrderQr,
   isActiveDeliveryStatus,
   isDeliveryOfferAcceptable,
+  estimateDeliveryEtaMinutes,
+  normalizeRecordedLocationTime,
   resolveRiderPresence,
 } from "./rider-rules";
 
@@ -501,7 +503,7 @@ async function releaseEscrowForOrder(order: any, actor?: any) {
     await db.insert(settlements).values({ orderId: order.id, beneficiaryId: vendorId, beneficiaryType: "vendor", amount: vendorAmount, note: "Vendor settlement after confirmed delivery" }).catch(() => {});
     await notifyUser(vendorId, "payment", "Payment Released", `D ${vendorAmount.toLocaleString()} has been released to your wallet.`, `/order/${order.id}`, { orderId: order.id });
   }
-  const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, order.id)).limit(1);
+  const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, order.id)).orderBy(desc(deliveries.createdAt)).limit(1);
   if (delivery?.riderId && delivery.deliveryFee > 0) {
     await addWalletTransaction({ userId: delivery.riderId, type: "rider_credit", direction: "credit", amount: delivery.deliveryFee, orderId: order.id, description: `Delivery earning for order #${order.id.slice(0, 8).toUpperCase()}` });
     await db.insert(riderEarnings).values({ riderId: delivery.riderId, deliveryId: delivery.id, orderId: order.id, amount: delivery.deliveryFee, status: "completed", paidAt: new Date() }).catch(() => {});
@@ -1359,10 +1361,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         phone: z.string(),
         paymentMethod: z.literal("wave"),
         fulfillmentType: z.enum(["delivery", "pickup"]).default("delivery"),
-        deliveryLatitude: z.number().optional(),
-        deliveryLongitude: z.number().optional(),
+        deliveryLatitude: z.number().min(-90).max(90).optional(),
+        deliveryLongitude: z.number().min(-180).max(180).optional(),
         deliveryArea: z.string().optional(),
         notes: z.string().optional(),
+      }).refine((value) => (value.deliveryLatitude == null) === (value.deliveryLongitude == null), {
+        message: "Delivery latitude and longitude must be provided together",
+        path: ["deliveryLatitude"],
       });
       const data = schema.parse(req.body);
       const productIds = [...new Set(data.items.map((item) => item.productId))];
@@ -1998,7 +2003,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/addresses", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const schema = z.object({ label: z.string().default("Home"), fullName: z.string().min(1), phone: z.string().min(1), address: z.string().min(1), city: z.string().min(1), region: z.string().min(1), isDefault: z.boolean().default(false) });
+    const schema = z.object({ label: z.string().default("Home"), fullName: z.string().min(1), phone: z.string().min(1), address: z.string().min(1), city: z.string().min(1), region: z.string().min(1), latitude: z.number().min(-90).max(90).optional(), longitude: z.number().min(-180).max(180).optional(), locationAccuracy: z.number().nonnegative().optional(), isDefault: z.boolean().default(false) }).refine((value) => (value.latitude == null) === (value.longitude == null), { message: "Latitude and longitude must be provided together", path: ["latitude"] });
     const data = schema.parse(req.body);
     if (data.isDefault) await db.update(addresses).set({ isDefault: false }).where(eq(addresses.userId, user.id));
     const [addr] = await db.insert(addresses).values({ ...data, userId: user.id }).returning();
@@ -2007,7 +2012,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/addresses/:id", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const schema = z.object({ label: z.string().optional(), fullName: z.string().optional(), phone: z.string().optional(), address: z.string().optional(), city: z.string().optional(), region: z.string().optional(), isDefault: z.boolean().optional() });
+    const schema = z.object({ label: z.string().optional(), fullName: z.string().optional(), phone: z.string().optional(), address: z.string().optional(), city: z.string().optional(), region: z.string().optional(), latitude: z.number().min(-90).max(90).optional().nullable(), longitude: z.number().min(-180).max(180).optional().nullable(), locationAccuracy: z.number().nonnegative().optional().nullable(), isDefault: z.boolean().optional() }).refine((value) => ("latitude" in value) === ("longitude" in value) && (value.latitude == null) === (value.longitude == null), { message: "Latitude and longitude must be updated together", path: ["latitude"] });
     const data = schema.parse(req.body);
     if (data.isDefault) await db.update(addresses).set({ isDefault: false }).where(eq(addresses.userId, user.id));
     const [addr] = await db.update(addresses).set(data).where(and(eq(addresses.id, param(req, "id")), eq(addresses.userId, user.id))).returning();
@@ -3178,8 +3183,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const user = (req as any).user;
       const { orderId, pickupAddress, pickupLatitude, pickupLongitude } = z.object({
-        orderId: z.string(), pickupAddress: z.string(), pickupLatitude: z.number().optional(), pickupLongitude: z.number().optional(), dropoffAddress: z.string(), dropoffLatitude: z.number().optional(), dropoffLongitude: z.number().optional(), deliveryFee: z.number().int().default(0),
-      }).parse(req.body);
+        orderId: z.string(),
+        pickupAddress: z.string().optional(),
+        pickupLatitude: z.number().min(-90).max(90).optional(),
+        pickupLongitude: z.number().min(-180).max(180).optional(),
+      }).refine((value) => (value.pickupLatitude == null) === (value.pickupLongitude == null), { message: "Pickup latitude and longitude must be provided together", path: ["pickupLatitude"] }).parse(req.body);
       const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
       if (!order) return res.status(404).json({ message: "Order not found" });
       await ensureVendorFulfillments(order);
@@ -3187,21 +3195,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fulfillments = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, orderId));
       if (!parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
       if (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup")) return res.status(409).json({ message: "Every seller must mark their items ready before dispatch." });
+      const [existingDelivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, order.id)).orderBy(desc(deliveries.createdAt)).limit(1);
+      if (existingDelivery && !["failed", "cancelled"].includes(existingDelivery.status)) return res.status(409).json({ message: "Rider dispatch has already started for this order", delivery: existingDelivery });
       const safeDropoffAddress = `${order.address}, ${order.city}`;
       const safeDropoffLatitude = order.deliveryLatitude;
       const safeDropoffLongitude = order.deliveryLongitude;
       const safeDeliveryFee = order.shipping;
-      const [delivery] = await db.insert(deliveries).values({ orderId, pickupAddress, pickupLatitude, pickupLongitude, dropoffAddress: safeDropoffAddress, dropoffLatitude: safeDropoffLatitude, dropoffLongitude: safeDropoffLongitude, deliveryFee: safeDeliveryFee, status: "searching" }).returning();
+      const safePickupAddress = pickupAddress || user.area || user.address || user.city || "Vendor location";
+      const safePickupLatitude = pickupLatitude ?? user.latitude ?? null;
+      const safePickupLongitude = pickupLongitude ?? user.longitude ?? null;
+      const [delivery] = await db.insert(deliveries).values({ orderId, pickupAddress: safePickupAddress, pickupLatitude: safePickupLatitude, pickupLongitude: safePickupLongitude, dropoffAddress: safeDropoffAddress, dropoffLatitude: safeDropoffLatitude, dropoffLongitude: safeDropoffLongitude, deliveryFee: safeDeliveryFee, status: "searching" }).returning();
       const riders = await db.select().from(deliveryRiders).where(and(eq(deliveryRiders.isOnline, true), eq(deliveryRiders.isAvailable, true), eq(deliveryRiders.verificationStatus, "verified")));
-      const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, pickupLatitude, pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
+      const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, safePickupLatitude, safePickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
       for (const rider of nearest) {
         await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 60_000) });
-        await db.insert(notifications).values({ userId: rider.userId, type: "delivery", title: "New Delivery Request", body: `Pickup: ${pickupAddress}. Fee: D ${safeDeliveryFee.toLocaleString()}`, icon: "bicycle-outline", color: "#E8813A", actionRoute: "/(rider)/deliveries" });
+        await db.insert(notifications).values({ userId: rider.userId, type: "delivery", title: "New Delivery Request", body: `Pickup: ${safePickupAddress}. Fee: D ${safeDeliveryFee.toLocaleString()}`, icon: "bicycle-outline", color: "#E8813A", actionRoute: "/(rider)/deliveries" });
       }
       await db.update(orders).set({ status: "rider_searching" as any, updatedAt: new Date() }).where(eq(orders.id, orderId));
       return res.status(201).json({ delivery, offeredRiders: nearest.length });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
+      if (err.code === "23505" && err.constraint === "idx_deliveries_one_active_order") {
+        return res.status(409).json({ message: "Rider dispatch has already started for this order" });
+      }
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -3497,15 +3513,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!allowed) return res.status(403).json({ message: "Forbidden" });
     const events = await db.select().from(orderTrackingEvents).where(eq(orderTrackingEvents.orderId, orderId)).orderBy(desc(orderTrackingEvents.createdAt));
     const qrs = await db.select().from(orderQrCodes).where(eq(orderQrCodes.orderId, orderId)).orderBy(desc(orderQrCodes.createdAt));
-    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
-    const latestRiderLocation = delivery?.riderId ? await db.select().from(riderLocations).where(eq(riderLocations.riderId, delivery.riderId)).orderBy(desc(riderLocations.createdAt)).limit(1) : [];
+    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).orderBy(desc(deliveries.createdAt)).limit(1);
+    const latestRiderLocation = delivery?.riderId ? await db.select().from(riderLocations).where(and(eq(riderLocations.riderId, delivery.riderId), eq(riderLocations.deliveryId, delivery.id))).orderBy(desc(riderLocations.createdAt)).limit(1) : [];
     const visibleQrs = user.role === "user"
         ? qrs.filter((qr) => qr.purpose === "delivery")
         : user.role === "vendor"
           ? qrs.filter((qr) => qr.purpose === "pickup")
           : [];
     const visibleOrder = safeOrder(order);
-    return res.json({ order: visibleOrder, events, qrs: visibleQrs, delivery: delivery || null, riderLocation: latestRiderLocation[0] || null });
+    const riderLocation = latestRiderLocation[0] || null;
+    const headingToDropoff = ["picked_up", "on_the_way", "in_transit"].includes(delivery?.status || order.status);
+    const destinationLatitude = headingToDropoff ? delivery?.dropoffLatitude : delivery?.pickupLatitude;
+    const destinationLongitude = headingToDropoff ? delivery?.dropoffLongitude : delivery?.pickupLongitude;
+    const remainingDistanceKm = riderLocation
+      ? distanceKm(riderLocation.latitude, riderLocation.longitude, destinationLatitude, destinationLongitude)
+      : null;
+    const safeDistanceKm = remainingDistanceKm != null && remainingDistanceKm < 999999 ? Math.round(remainingDistanceKm * 10) / 10 : null;
+    const lastUpdatedAt = riderLocation?.createdAt || null;
+    return res.json({
+      order: visibleOrder,
+      events,
+      qrs: visibleQrs,
+      delivery: delivery || null,
+      riderLocation,
+      progress: {
+        headingTo: headingToDropoff ? "dropoff" : "pickup",
+        remainingDistanceKm: safeDistanceKm,
+        etaMinutes: safeDistanceKm == null ? null : estimateDeliveryEtaMinutes(safeDistanceKm, riderLocation?.speed),
+        lastUpdatedAt,
+        isStale: !lastUpdatedAt || Date.now() - new Date(lastUpdatedAt).getTime() > 60_000,
+      },
+    });
   });
 
   app.post("/api/orders/:id/confirm-payment", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
@@ -3598,21 +3636,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup")) {
         return res.status(409).json({ message: "Every seller must mark their items ready before dispatching a rider." });
       }
-      const body = z.object({ pickupAddress: z.string().optional(), pickupLatitude: z.number().optional(), pickupLongitude: z.number().optional(), deliveryFee: z.number().int().optional() }).parse(req.body || {});
-      const pickupAddress = body.pickupAddress || "Vendor location";
+      const [existingDelivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, order.id)).orderBy(desc(deliveries.createdAt)).limit(1);
+      if (existingDelivery && !["failed", "cancelled"].includes(existingDelivery.status)) {
+        return res.status(409).json({ message: "Rider dispatch has already started for this order", delivery: existingDelivery });
+      }
+      const body = z.object({ pickupAddress: z.string().optional(), pickupLatitude: z.number().min(-90).max(90).optional(), pickupLongitude: z.number().min(-180).max(180).optional() }).refine((value) => (value.pickupLatitude == null) === (value.pickupLongitude == null), { message: "Pickup latitude and longitude must be provided together", path: ["pickupLatitude"] }).parse(req.body || {});
+      const pickupAddress = body.pickupAddress || user.area || user.address || user.city || "Vendor location";
+      const pickupLatitude = body.pickupLatitude ?? user.latitude ?? null;
+      const pickupLongitude = body.pickupLongitude ?? user.longitude ?? null;
       const [delivery] = await db.insert(deliveries).values({
         orderId: order.id,
         pickupAddress,
-        pickupLatitude: body.pickupLatitude,
-        pickupLongitude: body.pickupLongitude,
+        pickupLatitude,
+        pickupLongitude,
         dropoffAddress: `${order.address}, ${order.city}`,
         dropoffLatitude: (order as any).deliveryLatitude,
         dropoffLongitude: (order as any).deliveryLongitude,
-        deliveryFee: body.deliveryFee ?? order.shipping ?? 0,
+        deliveryFee: order.shipping ?? 0,
         status: "searching",
       }).returning();
       const riders = await db.select().from(deliveryRiders).where(and(eq(deliveryRiders.isOnline, true), eq(deliveryRiders.isAvailable, true), eq(deliveryRiders.verificationStatus, "verified")));
-      const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, body.pickupLatitude, body.pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
+      const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, pickupLatitude, pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
       for (const rider of nearest) {
         await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 60_000) });
         await notifyUser(rider.userId, "delivery", "New Delivery Request", `Pickup: ${pickupAddress}. Fee: D ${delivery.deliveryFee.toLocaleString()}`, "/(rider)", { deliveryId: delivery.id, orderId: order.id });
@@ -3622,6 +3666,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(201).json({ order: updated, delivery, offeredRiders: nearest.length });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
+      if (err.code === "23505" && err.constraint === "idx_deliveries_one_active_order") {
+        return res.status(409).json({ message: "Rider dispatch has already started for this order" });
+      }
       console.error(err);
       return res.status(500).json({ message: "Server error" });
     }
@@ -3634,7 +3681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const [orderBefore] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!orderBefore) return res.status(404).json({ message: "Order not found" });
     const parties = await getOrderParties(orderBefore);
-    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).orderBy(desc(deliveries.createdAt)).limit(1);
     if (!delivery?.riderId || delivery.status !== "assigned") return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
     if (!canVerifyOrderQr({
       actorId: user.id,
@@ -3662,7 +3709,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { code } = z.object({ code: z.string().min(6) }).parse(req.body);
     const [orderBefore] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!orderBefore) return res.status(404).json({ message: "Order not found" });
-    const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+    const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).orderBy(desc(deliveries.createdAt)).limit(1);
     if (!canVerifyOrderQr({ actorId: user.id, actorRole: user.role, purpose: "delivery", orderUserId: orderBefore.userId, orderRiderId: orderBefore.riderId, deliveryRiderId: deliveryBefore?.riderId })) return res.status(403).json({ message: "Only the shopper or assigned rider can confirm this delivery" });
     if (!deliveryBefore || !["picked_up", "in_transit"].includes(deliveryBefore.status)) return res.status(409).json({ message: "Pickup must be confirmed before delivery" });
     const [qr] = await db.select().from(orderQrCodes).where(and(eq(orderQrCodes.orderId, orderId), eq(orderQrCodes.code, code), eq(orderQrCodes.purpose, "delivery"), eq(orderQrCodes.status, "active"))).limit(1);
@@ -3670,7 +3717,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
     if (!consumedQr) return res.status(409).json({ message: "This delivery code was already used" });
     const [order] = await db.update(orders).set({ status: "delivered" as any, deliveryConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderId)).returning();
-    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+    const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).orderBy(desc(deliveries.createdAt)).limit(1);
     if (delivery) await db.update(deliveries).set({ status: "delivered", deliveredAt: new Date(), updatedAt: new Date() }).where(eq(deliveries.id, delivery.id));
     if (delivery?.riderId) await db.update(deliveryRiders).set({ isAvailable: true, completedDeliveries: sql`${deliveryRiders.completedDeliveries} + 1`, updatedAt: new Date() }).where(eq(deliveryRiders.userId, delivery.riderId));
     await addTracking(orderId, "delivered", "Order delivered", "Shopper/rider QR verification confirmed delivery.", user, { qrId: qr.id });
@@ -3690,7 +3737,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [orderBefore] = await db.select().from(orders).where(eq(orders.id, qr.orderId)).limit(1);
       if (!orderBefore) return res.status(404).json({ message: "Order not found" });
       const parties = await getOrderParties(orderBefore);
-      const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderBefore.id)).limit(1);
+      const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderBefore.id)).orderBy(desc(deliveries.createdAt)).limit(1);
 
       if (qr.purpose === "pickup") {
         if (!deliveryBefore?.riderId || deliveryBefore.status !== "assigned") return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
@@ -3766,19 +3813,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/rider/location", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { latitude, longitude, accuracy, heading, speed, deliveryId } = z.object({
+      const { latitude, longitude, accuracy, heading, speed, deliveryId, recordedAt } = z.object({
         latitude: z.number().min(-90).max(90),
         longitude: z.number().min(-180).max(180),
         accuracy: z.number().nonnegative().optional(),
         heading: z.number().min(0).max(360).optional(),
         speed: z.number().optional(),
         deliveryId: z.string().optional(),
+        recordedAt: z.string().datetime().optional(),
       }).parse(req.body);
       if (deliveryId) {
         const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, deliveryId)).limit(1);
         if (!canRiderAccessDelivery(user.id, delivery)) return res.status(403).json({ message: "Location can only be shared for your active delivery" });
       }
-      const [loc] = await db.insert(riderLocations).values({ riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed }).returning();
+      const locationTime = normalizeRecordedLocationTime(recordedAt);
+      if (!locationTime) return res.status(400).json({ message: "Location timestamp is outside the accepted replay window" });
+      const [loc] = await db.insert(riderLocations).values({ riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed, createdAt: locationTime }).returning();
       await db.update(deliveryRiders).set({ latitude, longitude, updatedAt: new Date() }).where(eq(deliveryRiders.userId, user.id));
       emitRealtime("rider:location", { riderId: user.id, deliveryId, latitude, longitude, accuracy, heading, speed, createdAt: loc.createdAt }, deliveryId ? [`delivery:${deliveryId}`, "role:admin"] : ["role:admin"]);
       return res.status(201).json(loc);
@@ -3792,7 +3842,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const liveOrders = await db.select().from(orders).orderBy(desc(orders.updatedAt)).limit(100);
     const liveDeliveries = await db.select().from(deliveries).orderBy(desc(deliveries.updatedAt)).limit(100);
     const recentEvents = await db.select().from(orderTrackingEvents).orderBy(desc(orderTrackingEvents.createdAt)).limit(100);
-    return res.json({ orders: liveOrders, deliveries: liveDeliveries, events: recentEvents });
+    const recentLocations = await db.select().from(riderLocations).orderBy(desc(riderLocations.createdAt)).limit(500);
+    const latestByDelivery = new Map<string, typeof riderLocations.$inferSelect>();
+    for (const location of recentLocations) {
+      if (location.deliveryId && !latestByDelivery.has(location.deliveryId)) latestByDelivery.set(location.deliveryId, location);
+    }
+    return res.json({ orders: liveOrders, deliveries: liveDeliveries, events: recentEvents, locations: [...latestByDelivery.values()] });
   });
 
   app.get("/api/profile/completion", requireAuth, async (req: Request, res: Response) => {
@@ -3846,7 +3901,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
         if (!order) return socket.emit("room:error", { room: "order", message: "Order not found" });
         const parties = await getOrderParties(order);
-        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).orderBy(desc(deliveries.createdAt)).limit(1);
         const allowed = user.role === "admin" || order.userId === user.id || parties.vendorIds.includes(user.id) || order.riderId === user.id || delivery?.riderId === user.id;
         if (!allowed) return socket.emit("room:error", { room: "order", message: "Forbidden" });
         socket.join(`order:${orderId}`);

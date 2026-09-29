@@ -158,6 +158,27 @@ For an existing PostgreSQL deployment, apply `packages/database/migrations/custo
 
 The website includes public product and service discovery, search and filtering, detail pages, customer cart and server-priced Wave checkout, order and delivery tracking, bookings, notifications, support, vendor and service-provider dashboards, catalogue controls, finance and payout requests, returns, and rider delivery operations. Each authenticated account is routed to its own role area. Administrator sessions are rejected by the general authentication endpoint and the website sends administrators to the separate secured portal.
 
+## Delivery maps and live tracking
+
+The delivery flow now carries one verified map context from checkout through dispatch and delivery:
+
+1. A customer can save a GPS pin with an address or select and drag the delivery pin during checkout.
+2. The API stores the order's delivery coordinates and never substitutes a coordinate supplied by another order.
+3. After every seller marks its items ready, a seller can dispatch the nearest verified available riders from the Business app.
+4. The Rider app shows pickup and drop-off pins, distance and estimated travel time, and queues location samples while the network is unavailable.
+5. The Customer app shows only the assigned rider's location for that delivery, with stale/offline status, remaining distance and ETA.
+6. The Admin portal's **Live Map** section shows active deliveries and opens each rider or destination in Google Maps.
+
+Location samples include their device recording time. The API rejects samples older than 24 hours or more than five minutes in the future, isolates samples by delivery, and prevents concurrent dispatch requests from creating two active deliveries for one order.
+
+For an existing PostgreSQL deployment, apply:
+
+```bash
+psql "$DATABASE_URL" -f packages/database/migrations/delivery_maps_migration.sql
+```
+
+For native Customer builds configure `GOOGLE_MAPS_CUSTOMER_ANDROID_API_KEY` and `GOOGLE_MAPS_CUSTOMER_IOS_API_KEY`. For native Rider builds configure `GOOGLE_MAPS_ANDROID_API_KEY` and `GOOGLE_MAPS_IOS_API_KEY`. Restrict every key in Google Cloud to the matching package/bundle ID (`gm.mansamart.customer` or `gm.mansamart.rider`) and enable only the required Android/iOS Maps SDK. Do not commit real keys. Written addresses and external Google Maps links remain available if a native map key is not configured.
+
 ## Wave Checkout
 
 The customer app and API include a server-side Wave Checkout integration. It is deliberately disabled by default because production activation requires a Wave Business wallet, Checkout API permission, an API key, separate signing secrets, webhook registration, and written confirmation that the wallet accepts `GMD` checkout sessions.

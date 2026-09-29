@@ -1,13 +1,15 @@
 import React from "react";
 import {
-  View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, Linking,
+  View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, Linking, Alert,
 } from "react-native";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { safeBack } from "@/lib/navigation";
+import { apiRequest } from "@/lib/query-client";
+import { requestCurrentLocation } from "@/lib/location";
 
 const STATUS_STEPS = [
   { key: "pending", label: "Order Placed", icon: "checkmark-circle", desc: "We've received your order" },
@@ -48,12 +50,29 @@ export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
+  const queryClient = useQueryClient();
 
   const { data: tracking, isLoading, error } = useQuery<any>({
     queryKey: ["/api/orders", id, "tracking"],
     refetchInterval: 10000,
   });
   const order = tracking?.order;
+  const dispatchRider = useMutation({
+    mutationFn: async () => {
+      const location = await requestCurrentLocation().catch(() => null);
+      const response = await apiRequest("POST", `/api/orders/${id}/dispatch-rider`, {
+        pickupAddress: location?.area || location?.city || "Vendor pickup location",
+        ...(location ? { pickupLatitude: location.latitude, pickupLongitude: location.longitude } : {}),
+      });
+      return response.json();
+    },
+    onSuccess: (result: any) => {
+      void queryClient.invalidateQueries({ queryKey: ["/api/orders", id, "tracking"] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      Alert.alert("Rider search started", `${result.offeredRiders || 0} nearby verified riders were notified.`);
+    },
+    onError: (cause: any) => Alert.alert("Could not dispatch rider", cause?.message || "Please try again."),
+  });
 
   if (isLoading) {
     return (
@@ -174,6 +193,20 @@ export default function OrderDetailScreen() {
                 <Text style={styles.itemQty}>{fmt(ev.createdAt)}</Text>
               </View>
             ))}
+          </View>
+        )}
+
+        {order.status === "ready_for_pickup" && !tracking?.delivery && order.fulfillmentType !== "pickup" && (
+          <View style={styles.dispatchCard}>
+            <View style={styles.dispatchIcon}><Ionicons name="bicycle" size={25} color={Colors.primary} /></View>
+            <View style={styles.dispatchCopy}>
+              <Text style={styles.cardTitle}>Ready to find a rider</Text>
+              <Text style={styles.stepDesc}>MansaMart will use your current shop position to notify the nearest verified available riders.</Text>
+            </View>
+            <Pressable style={[styles.dispatchButton, dispatchRider.isPending && styles.disabledButton]} disabled={dispatchRider.isPending} onPress={() => dispatchRider.mutate()}>
+              {dispatchRider.isPending ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="navigate" size={18} color="#fff" />}
+              <Text style={styles.dispatchButtonText}>{dispatchRider.isPending ? "Finding nearby riders…" : "Find a rider now"}</Text>
+            </Pressable>
           </View>
         )}
 
@@ -303,6 +336,12 @@ const styles = StyleSheet.create({
     shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
   },
   cardTitle: { fontSize: 15, fontWeight: "700", color: "#1A1A2E", marginBottom: 12 },
+  dispatchCard: { backgroundColor: "#F0FFF8", borderWidth: 1, borderColor: "#B7E8D8", borderRadius: 16, padding: 16 },
+  dispatchIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: "#fff", alignItems: "center", justifyContent: "center", marginBottom: 10 },
+  dispatchCopy: { marginBottom: 12 },
+  dispatchButton: { minHeight: 48, borderRadius: 13, backgroundColor: Colors.primary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  dispatchButtonText: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  disabledButton: { opacity: 0.65 },
   trackingCode: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12, backgroundColor: "#F7F8FA", borderRadius: 8, padding: 8 },
   trackingText: { fontSize: 12, color: "#666", fontWeight: "600" },
   timeline: { gap: 0 },

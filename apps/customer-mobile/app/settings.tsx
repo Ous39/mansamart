@@ -11,6 +11,7 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { getApiUrl } from "@/lib/query-client";
 import { getToken } from "@/lib/auth-token";
+import { DeliveryLocationPicker } from "@/components/DeliveryLocationPicker";
 
 type Section = "main" | "editProfile" | "changePassword" | "addresses";
 
@@ -163,7 +164,7 @@ export default function SettingsScreen() {
 function AddressesSection({ topPad, insets, onBack }: any) {
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ label: "Home", fullName: "", phone: "", address: "", city: "Banjul", region: "Greater Banjul", isDefault: false });
+  const [form, setForm] = useState<{ label: string; fullName: string; phone: string; address: string; city: string; region: string; latitude?: number; longitude?: number; locationAccuracy?: number; isDefault: boolean }>({ label: "Home", fullName: "", phone: "", address: "", city: "Banjul", region: "Greater Banjul", isDefault: false });
   const { data: addrList = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/addresses"] });
   const addAddr = useMutation({
     mutationFn: (data: any) => apiCall("/api/addresses", "POST", data),
@@ -206,6 +207,7 @@ function AddressesSection({ topPad, insets, onBack }: any) {
               </View>
               <Text style={styles.addrName}>{addr.fullName} • {addr.phone}</Text>
               <Text style={styles.addrText}>{addr.address}, {addr.city}, {addr.region}</Text>
+              {addr.latitude != null && addr.longitude != null && <Text style={styles.mapPinText}>● Delivery map pin saved</Text>}
             </View>
           ))}
           {adding && (
@@ -221,6 +223,11 @@ function AddressesSection({ topPad, insets, onBack }: any) {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
                 {cities.map(c => <Pressable key={c} onPress={() => setForm({ ...form, city: c })} style={[styles.chip, form.city === c && styles.chipActive]}><Text style={[styles.chipText, form.city === c && styles.chipTextActive]}>{c}</Text></Pressable>)}
               </ScrollView>
+              <DeliveryLocationPicker
+                compact
+                value={form.latitude != null && form.longitude != null ? { latitude: form.latitude, longitude: form.longitude, accuracy: form.locationAccuracy } : null}
+                onChange={(coordinate) => setForm({ ...form, latitude: coordinate.latitude, longitude: coordinate.longitude, locationAccuracy: coordinate.accuracy })}
+              />
               <View style={styles.defaultRow}>
                 <Text style={styles.fieldLabel}>Set as default</Text>
                 <Switch value={form.isDefault} onValueChange={v => setForm({ ...form, isDefault: v })} trackColor={{ true: Colors.primary }} />
@@ -308,6 +315,7 @@ const styles = S.create({
   defaultBadge: { backgroundColor: "#E6FAF3", color: Colors.primary, fontSize: 10, fontWeight: "700", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
   addrName: { fontSize: 13, color: "#555", marginBottom: 4 },
   addrText: { fontSize: 13, color: "#888" },
+  mapPinText: { marginTop: 7, fontSize: 11, color: Colors.primary, fontWeight: "700" },
   emptyAddr: { alignItems: "center", paddingVertical: 50, gap: 12 },
   emptyAddrText: { fontSize: 16, color: "#999" },
   defaultRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 8 },

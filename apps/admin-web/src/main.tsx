@@ -13,6 +13,7 @@ const sections = {
   Users: "/api/admin/users",
   Vendors: "/api/admin/vendors",
   Orders: "/api/admin/orders",
+  "Live Map": "/api/admin/orders/live",
   Riders: "/api/admin/riders",
   Verification: "/api/admin/verifications",
   Finance: "/api/admin/payments",
@@ -107,8 +108,30 @@ function Login({ onSubmit, onVerifyMfa, onCancelMfa, challengeId, busy, error }:
 
 function AdminContent({ section, data, refresh }: { section: Section; data: unknown; refresh: () => Promise<void> }) {
   if (section === "Overview") return <Overview data={data}/>;
+  if (section === "Live Map") return <LiveDeliveryMap data={data} refresh={refresh}/>;
   const rows = Array.isArray(data) ? data : data && typeof data === "object" ? Object.values(data as Record<string, unknown>).find(Array.isArray) as unknown[] || [] : [];
   return <section className="data-card"><div className="card-head"><div><h2>{section} management</h2><p>{rows.length} records returned by the live API</p></div><button className="refresh" onClick={() => void refresh()}>Refresh</button></div>{rows.length ? <div className="table-wrap"><table><thead><tr><th>Name / ID</th><th>Status / Role</th><th>Contact / Detail</th><th>Created</th><th>Action</th></tr></thead><tbody>{rows.slice(0,100).map((raw, index) => <AdminRow key={String((raw as Record<string, unknown>).id || index)} section={section} row={raw as Record<string, unknown>} refresh={refresh}/>)}</tbody></table></div> : <div className="empty"><b>No {section.toLowerCase()} found</b><p>New records will appear here automatically.</p></div>}</section>;
+}
+
+function LiveDeliveryMap({ data, refresh }: { data: unknown; refresh: () => Promise<void> }) {
+  const payload = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const deliveries = Array.isArray(payload.deliveries) ? payload.deliveries as Record<string, unknown>[] : [];
+  const locations = Array.isArray(payload.locations) ? payload.locations as Record<string, unknown>[] : [];
+  const active = deliveries.filter((delivery) => ["searching", "assigned", "picked_up", "in_transit"].includes(String(delivery.status)));
+  const latest = (deliveryId: string) => locations.find((location) => String(location.deliveryId) === deliveryId);
+  const mapUrl = (latitude: unknown, longitude: unknown, fallback?: unknown) => {
+    const hasCoordinates = typeof latitude === "number" && typeof longitude === "number";
+    const query = hasCoordinates ? `${latitude},${longitude}` : String(fallback || "");
+    return query ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}` : null;
+  };
+  return <section className="data-card live-map"><div className="card-head"><div><h2>Live delivery map</h2><p>{active.length} active deliveries · rider positions are isolated per delivery</p></div><button className="refresh" onClick={() => void refresh()}>Refresh positions</button></div>{active.length ? <div className="delivery-map-grid">{active.map((delivery) => {
+    const id = String(delivery.id || ""); const position = latest(id);
+    const currentUrl = mapUrl(position?.latitude, position?.longitude, delivery.pickupAddress);
+    const dropoffUrl = mapUrl(delivery.dropoffLatitude, delivery.dropoffLongitude, delivery.dropoffAddress);
+    const updatedAt = position?.createdAt ? new Date(String(position.createdAt)) : null;
+    const stale = !updatedAt || Date.now() - updatedAt.getTime() > 60_000;
+    return <article key={id} className="delivery-map-card"><div className="map-preview"><span className={stale ? "map-pin stale" : "map-pin"}>●</span><b>{position ? stale ? "Last known rider position" : "Rider location live" : "Waiting for rider GPS"}</b><small>{position ? `${Number(position.latitude).toFixed(5)}, ${Number(position.longitude).toFixed(5)}` : String(delivery.pickupAddress || "Pickup location")}</small></div><div className="map-card-body"><div><span className="pill">{String(delivery.status || "unknown").replace(/_/g, " ")}</span><small>Delivery {id.slice(0, 8).toUpperCase()}</small></div><p><b>Pickup:</b> {String(delivery.pickupAddress || "Not supplied")}</p><p><b>Drop-off:</b> {String(delivery.dropoffAddress || "Not supplied")}</p>{updatedAt && <p className={stale ? "stale-text" : "live-text"}>{stale ? "Offline / delayed" : "Updated live"} · {updatedAt.toLocaleTimeString()}</p>}<div className="map-links">{currentUrl && <a href={currentUrl} target="_blank" rel="noreferrer">Open rider map</a>}{dropoffUrl && <a href={dropoffUrl} target="_blank" rel="noreferrer">Open drop-off</a>}</div></div></article>;
+  })}</div> : <div className="empty"><b>No active deliveries</b><p>Assigned and in-transit deliveries will appear here.</p></div>}</section>;
 }
 
 function AdminRow({ section, row, refresh }: { section: Section; row: Record<string, unknown>; refresh: () => Promise<void> }) {

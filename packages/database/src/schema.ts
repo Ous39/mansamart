@@ -306,6 +306,9 @@ export const addresses = pgTable("addresses", {
   address: text("address").notNull(),
   city: text("city").notNull(),
   region: text("region").notNull(),
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  locationAccuracy: real("location_accuracy"),
   isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -612,7 +615,11 @@ export const deliveries = pgTable("deliveries", {
   deliveredAt: timestamp("delivered_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  oneActiveDeliveryPerOrder: uniqueIndex("idx_deliveries_one_active_order")
+    .on(table.orderId)
+    .where(sql`${table.status} NOT IN ('failed', 'cancelled', 'delivered')`),
+}));
 
 export const deliveryRequests = pgTable("delivery_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -44,6 +44,12 @@ export function CustomerDeliveryMap(props: CustomerDeliveryMapProps) {
         <View style={styles.statusRow}><View style={[styles.dot, stale && !finished && styles.dotStale]} /><Text style={styles.status}>{finished ? "Delivery completed" : stale ? "Connection lost · showing last location" : "Live rider tracking"}</Text></View>
         <Text style={styles.title}>{finished ? "Order delivered" : pickedUp ? "Your order is on the way" : "Rider is heading to the vendor"}</Text>
         <Text style={styles.sub}>{updatedAt ? `Rider location updated ${updatedAt.toLocaleTimeString()}` : "Waiting for the rider's first GPS update."}</Text>
+        {(props.progress?.remainingDistanceKm != null || props.progress?.etaMinutes != null) && (
+          <View style={styles.metrics}>
+            {props.progress.remainingDistanceKm != null && <View style={styles.metric}><Ionicons name="speedometer-outline" size={16} color={Colors.primary} /><Text style={styles.metricText}>{props.progress.remainingDistanceKm.toFixed(1)} km remaining</Text></View>}
+            {props.progress.etaMinutes != null && <View style={styles.metric}><Ionicons name="time-outline" size={16} color={Colors.primary} /><Text style={styles.metricText}>About {props.progress.etaMinutes} min</Text></View>}
+          </View>
+        )}
         {stale && !finished && <Text style={styles.warning}>The rider may have poor or no internet. This marker will move again automatically after reconnection.</Text>}
         {rider && <Pressable style={styles.button} onPress={() => openMap(rider.latitude, rider.longitude, "Rider's last known location")}><Ionicons name="map-outline" size={17} color={Colors.primary} /><Text style={styles.buttonText}>Open last location in Google Maps</Text></Pressable>}
       </View>
@@ -64,6 +70,9 @@ const styles = StyleSheet.create({
   title: { marginTop: 5, color: Colors.text, fontWeight: "800", fontSize: 15 },
   sub: { marginTop: 4, color: Colors.textMuted, fontSize: 12, lineHeight: 18 },
   warning: { marginTop: 8, color: "#92400E", backgroundColor: "#FFFBEB", borderRadius: 9, padding: 8, fontSize: 11, lineHeight: 16 },
+  metrics: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  metric: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: Colors.primaryLight, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
+  metricText: { color: Colors.primary, fontSize: 11, fontWeight: "800" },
   button: { marginTop: 10, minHeight: 42, borderRadius: 11, backgroundColor: Colors.primaryLight, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
   buttonText: { color: Colors.primary, fontWeight: "800", fontSize: 12 },
   empty: { marginTop: 12, padding: 22, borderRadius: 16, backgroundColor: Colors.primaryLight, alignItems: "center", gap: 8 },

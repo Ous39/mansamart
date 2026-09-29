@@ -10,4 +10,9 @@ export interface CustomerDeliveryMapProps {
     accuracy?: number | null;
     createdAt?: string | null;
   } | null;
+  progress?: {
+    remainingDistanceKm?: number | null;
+    etaMinutes?: number | null;
+    isStale?: boolean;
+  } | null;
 }

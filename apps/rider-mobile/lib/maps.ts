@@ -4,6 +4,15 @@ export function hasCoords(lat?: number | null, lng?: number | null) {
   return typeof lat === "number" && Number.isFinite(lat) && typeof lng === "number" && Number.isFinite(lng);
 }
 
+export function distanceBetweenKm(aLat?: number | null, aLng?: number | null, bLat?: number | null, bLng?: number | null) {
+  if (!hasCoords(aLat, aLng) || !hasCoords(bLat, bLng)) return null;
+  const radius = 6371;
+  const dLat = (bLat! - aLat!) * Math.PI / 180;
+  const dLng = (bLng! - aLng!) * Math.PI / 180;
+  const value = Math.sin(dLat / 2) ** 2 + Math.cos(aLat! * Math.PI / 180) * Math.cos(bLat! * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return radius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
 export function mapSearchUrl(lat?: number | null, lng?: number | null, label = "MansaMart location", fallback?: string) {
   const query = hasCoords(lat, lng) ? `${lat},${lng}` : fallback;
   if (!query) return null;

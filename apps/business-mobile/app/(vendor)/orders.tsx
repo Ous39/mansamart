@@ -148,6 +148,9 @@ export default function VendorOrdersScreen() {
                 )}
                 {sellerStatus === "confirmed" && <Pressable style={styles.progressBtn} onPress={() => updateStatus.mutate({ id: o.id, status: "preparing" })}><Text style={styles.progressText}>Start Preparing</Text></Pressable>}
                 {sellerStatus === "preparing" && <Pressable style={styles.progressBtn} onPress={() => updateStatus.mutate({ id: o.id, status: "ready_for_pickup" })}><Text style={styles.progressText}>Mark Ready for Pickup</Text></Pressable>}
+                <Pressable style={styles.detailBtn} onPress={() => router.push({ pathname: "/order/[id]", params: { id: o.id } })}>
+                  <Text style={styles.detailBtnText}>View details, tracking & map</Text><Ionicons name="chevron-forward" size={16} color={Colors.primary} />
+                </Pressable>
               </View>
             );
           }}
@@ -188,6 +191,8 @@ const styles = StyleSheet.create({
   paymentWaitText: { color: "#92400E", fontFamily: "Inter_500Medium", fontSize: 11 },
   progressBtn: { alignItems: "center", backgroundColor: Colors.primary, paddingVertical: 10, borderRadius: 10, marginTop: 4 },
   progressText: { color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 13 },
+  detailBtn: { minHeight: 40, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderTopWidth: 1, borderTopColor: Colors.borderLight, marginTop: 4, paddingTop: 8 },
+  detailBtnText: { color: Colors.primary, fontFamily: "Inter_600SemiBold", fontSize: 12 },
   emptyState: { alignItems: "center", paddingTop: 60, gap: 8 },
   emptyText: { fontSize: 16, fontFamily: "Inter_500Medium", color: Colors.textMuted },
 });

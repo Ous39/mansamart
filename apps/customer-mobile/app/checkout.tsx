@@ -22,6 +22,7 @@ import { useCart } from "@/contexts/CartContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiRequest } from "@/lib/query-client";
 import { useQuery } from "@tanstack/react-query";
+import { DeliveryLocationPicker } from "@/components/DeliveryLocationPicker";
 
 const paymentMethods = [
   { id: "wave", label: "Wave Mobile Money", icon: "phone-portrait-outline" },
@@ -38,6 +39,9 @@ export default function CheckoutScreen() {
   const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
   const [validationError, setValidationError] = useState("");
+  const [deliveryLatitude, setDeliveryLatitude] = useState<number | undefined>(user?.latitude ?? undefined);
+  const [deliveryLongitude, setDeliveryLongitude] = useState<number | undefined>(user?.longitude ?? undefined);
+  const [locationAccuracy, setLocationAccuracy] = useState<number | undefined>();
 
   const [name, setName] = useState(user?.name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
@@ -62,6 +66,9 @@ export default function CheckoutScreen() {
     setPhone(saved.phone);
     setAddress(saved.address);
     setCity(saved.city);
+    setDeliveryLatitude(saved.latitude ?? undefined);
+    setDeliveryLongitude(saved.longitude ?? undefined);
+    setLocationAccuracy(saved.locationAccuracy ?? undefined);
   }, [savedAddresses, selectedAddressId]);
 
   useEffect(() => {
@@ -82,8 +89,9 @@ export default function CheckoutScreen() {
       router.replace("/cart");
       return;
     }
-    if (name.trim().length < 2 || phone.trim().length < 7 || address.trim().length < 5 || city.trim().length < 2) {
-      setValidationError("Enter a full name, reachable phone number, street address, and city.");
+    const missingDeliveryAddress = fulfillmentType === "delivery" && (address.trim().length < 5 || city.trim().length < 2);
+    if (name.trim().length < 2 || phone.trim().length < 7 || missingDeliveryAddress) {
+      setValidationError(fulfillmentType === "delivery" ? "Enter a full name, reachable phone number, street address, and city." : "Enter a full name and reachable phone number.");
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -108,6 +116,11 @@ export default function CheckoutScreen() {
           phone: phone.trim(),
           paymentMethod,
           fulfillmentType,
+          ...(fulfillmentType === "delivery" && deliveryLatitude != null && deliveryLongitude != null ? {
+            deliveryLatitude,
+            deliveryLongitude,
+            deliveryArea: city.trim(),
+          } : {}),
           notes: fulfillmentType === "pickup" ? "Shopper will pickup from vendor" : "Home delivery requested",
         });
         const order = await orderResponse.json();
@@ -169,6 +182,9 @@ export default function CheckoutScreen() {
                     setPhone(saved.phone);
                     setAddress(saved.address);
                     setCity(saved.city);
+                    setDeliveryLatitude(saved.latitude ?? undefined);
+                    setDeliveryLongitude(saved.longitude ?? undefined);
+                    setLocationAccuracy(saved.locationAccuracy ?? undefined);
                     setValidationError("");
                   }}
                 >
@@ -246,6 +262,18 @@ export default function CheckoutScreen() {
               </View>
             </View>
           </View>
+
+          {fulfillmentType === "delivery" && (
+            <DeliveryLocationPicker
+              value={deliveryLatitude != null && deliveryLongitude != null ? { latitude: deliveryLatitude, longitude: deliveryLongitude, accuracy: locationAccuracy } : null}
+              onChange={(coordinate) => {
+                setDeliveryLatitude(coordinate.latitude);
+                setDeliveryLongitude(coordinate.longitude);
+                setLocationAccuracy(coordinate.accuracy);
+                setValidationError("");
+              }}
+            />
+          )}
 
           {!!validationError && (
             <View style={styles.errorBox}>

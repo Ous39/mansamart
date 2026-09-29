@@ -84,3 +84,26 @@ export function canVerifyOrderQr(input: {
 export function canReleaseDeliveryPayment(order: { deliveryConfirmedAt?: Date | string | null; status?: string | null }) {
   return !!order.deliveryConfirmedAt && ["delivered", "completed"].includes(order.status || "");
 }
+
+export function normalizeRecordedLocationTime(
+  value?: string | null,
+  now = new Date(),
+  maxAgeMs = 24 * 60 * 60_000,
+  maxFutureMs = 5 * 60_000,
+) {
+  if (!value) return now;
+  const recordedAt = new Date(value);
+  const timestamp = recordedAt.getTime();
+  if (!Number.isFinite(timestamp)) return null;
+  if (timestamp < now.getTime() - maxAgeMs || timestamp > now.getTime() + maxFutureMs) return null;
+  return recordedAt;
+}
+
+export function estimateDeliveryEtaMinutes(distance: number, speedMetersPerSecond?: number | null) {
+  if (!Number.isFinite(distance) || distance < 0) return null;
+  const measuredSpeedKmh = typeof speedMetersPerSecond === "number" && speedMetersPerSecond > 1
+    ? speedMetersPerSecond * 3.6
+    : 25;
+  const safeSpeedKmh = Math.min(Math.max(measuredSpeedKmh, 10), 70);
+  return Math.max(1, Math.ceil((distance / safeSpeedKmh) * 60));
+}

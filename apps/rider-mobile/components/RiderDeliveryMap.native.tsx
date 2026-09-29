@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import MapView, { Marker, PROVIDER_GOOGLE, type LatLng } from "react-native-maps";
 import Colors from "@/constants/colors";
-import { hasCoords, openNavigation } from "@/lib/maps";
+import { distanceBetweenKm, hasCoords, openNavigation } from "@/lib/maps";
 import { flushPendingDeliveryLocation, payloadFromLocation, queueDeliveryLocation, startBackgroundDeliveryTracking, stopBackgroundDeliveryTracking } from "@/lib/delivery-location";
 import type { RiderDeliveryMapProps } from "./RiderDeliveryMap.types";
 
@@ -41,6 +41,8 @@ export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
 
   const nextStop = headingToShopper ? stops.find((stop) => stop.key === "dropoff") : stops.find((stop) => stop.key === "pickup");
   const nextAddress = headingToShopper ? props.dropoffAddress : props.pickupAddress;
+  const remainingDistance = riderLocation && nextStop ? distanceBetweenKm(riderLocation.latitude, riderLocation.longitude, nextStop.latitude, nextStop.longitude) : null;
+  const estimatedMinutes = remainingDistance == null ? null : Math.max(1, Math.ceil((remainingDistance / 25) * 60));
 
   useEffect(() => {
     if (props.trackRider === false || !props.deliveryId) {
@@ -158,6 +160,7 @@ export function RiderDeliveryMap(props: RiderDeliveryMapProps) {
           <Ionicons name="navigate-circle" size={34} color={Colors.primary} />
         </View>
         <Text style={styles.message}>{locationMessage}</Text>
+        {remainingDistance != null && <View style={styles.tripMetrics}><Text style={styles.tripMetric}>{remainingDistance.toFixed(1)} km remaining</Text><Text style={styles.tripMetric}>About {estimatedMinutes} min</Text></View>}
         <Text style={styles.offlineHint}>For weak signal areas, download The Gambia in Google Maps Offline Maps before starting deliveries.</Text>
         <View style={styles.legend}>
           <Legend color="#E8813A" label="Pickup" />
@@ -203,6 +206,8 @@ const styles = StyleSheet.create({
   title: { marginTop: 3, fontSize: 15, fontWeight: "800", color: Colors.text },
   message: { marginTop: 5, color: Colors.textMuted, fontSize: 12, lineHeight: 18 },
   offlineHint: { marginTop: 6, color: "#7C5C18", backgroundColor: "#FFFBEB", borderRadius: 9, padding: 8, fontSize: 11, lineHeight: 16 },
+  tripMetrics: { flexDirection: "row", gap: 8, marginTop: 9 },
+  tripMetric: { color: Colors.primary, backgroundColor: Colors.primaryLight, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6, fontSize: 11, fontWeight: "800" },
   legend: { flexDirection: "row", gap: 14, marginTop: 10 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },

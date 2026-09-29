@@ -252,6 +252,7 @@ export default function OrderDetailScreen() {
               dropoffLatitude={tracking.delivery.dropoffLatitude}
               dropoffLongitude={tracking.delivery.dropoffLongitude}
               riderLocation={tracking.riderLocation}
+              progress={tracking.progress}
               status={tracking.delivery.status || order.status}
             />
           </View>

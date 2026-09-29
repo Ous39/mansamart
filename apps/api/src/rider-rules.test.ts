@@ -6,6 +6,8 @@ import {
   canReleaseDeliveryPayment,
   canVerifyOrderQr,
   isDeliveryOfferAcceptable,
+  estimateDeliveryEtaMinutes,
+  normalizeRecordedLocationTime,
   resolveRiderPresence,
 } from "./rider-rules";
 
@@ -58,4 +60,17 @@ test("delivery payment cannot be released before delivery verification", () => {
   assert.equal(canReleaseDeliveryPayment({ status: "delivered", deliveryConfirmedAt: null }), false);
   assert.equal(canReleaseDeliveryPayment({ status: "in_transit", deliveryConfirmedAt: new Date() }), false);
   assert.equal(canReleaseDeliveryPayment({ status: "delivered", deliveryConfirmedAt: new Date() }), true);
+});
+
+test("offline rider timestamps remain truthful and reject unsafe replay windows", () => {
+  const now = new Date("2026-09-29T12:00:00Z");
+  assert.equal(normalizeRecordedLocationTime("2026-09-29T11:55:00Z", now)?.toISOString(), "2026-09-29T11:55:00.000Z");
+  assert.equal(normalizeRecordedLocationTime("2026-09-28T11:59:59Z", now), null);
+  assert.equal(normalizeRecordedLocationTime("2026-09-29T12:05:01Z", now), null);
+});
+
+test("delivery ETA uses a safe speed range and never returns zero", () => {
+  assert.equal(estimateDeliveryEtaMinutes(10), 24);
+  assert.equal(estimateDeliveryEtaMinutes(0, 12), 1);
+  assert.equal(estimateDeliveryEtaMinutes(Number.POSITIVE_INFINITY), null);
 });
