@@ -19,6 +19,7 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { getDefaultRouteForRole } from "@/lib/role-routes";
 import { safeBack } from "@/lib/navigation";
+import { AlternativeSignIn } from "@/components/AlternativeSignIn";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -155,6 +156,8 @@ export default function LoginScreen() {
             )}
           </Pressable>
         </View>
+
+        <AlternativeSignIn role="delivery_rider" />
 
         <View style={styles.footer}>
           <Text style={styles.footerText}>Don’t have an account?</Text>

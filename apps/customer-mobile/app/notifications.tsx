@@ -127,11 +127,10 @@ export default function NotificationsScreen() {
             </View>
           )}
         </View>
-        {unread > 0 && !markAll.isPending && (
-          <Pressable onPress={() => markAll.mutate()} hitSlop={8}>
-            <Text style={styles.markAllText}>Mark all read</Text>
-          </Pressable>
-        )}
+        <View style={styles.headerActions}>
+          {unread > 0 && !markAll.isPending ? <Pressable onPress={() => markAll.mutate()} hitSlop={8}><Ionicons name="checkmark-done" size={22} color={Colors.primary} /></Pressable> : null}
+          <Pressable onPress={() => router.push("/notification-settings")} hitSlop={8}><Ionicons name="settings-outline" size={22} color={Colors.text} /></Pressable>
+        </View>
       </View>
 
       {isLoading ? (
@@ -182,6 +181,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: Colors.borderLight,
   },
   headerMid: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 12 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 16 },
   headerTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.text },
   unreadBadge: {
     backgroundColor: Colors.error, borderRadius: 10,

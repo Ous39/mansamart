@@ -20,6 +20,8 @@ export class MansaMartApi {
       headers: {
         "Content-Type": "application/json",
         "X-MansaMart-App": this.audience,
+        "X-Device-Platform": "web",
+        "X-Device-Name": typeof navigator !== "undefined" ? `${navigator.platform || "Browser"} browser` : "Browser",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init.headers,
       },

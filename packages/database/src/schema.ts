@@ -57,8 +57,49 @@ export const sessions = pgTable("sessions", {
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   token: text("token").notNull().unique(),
   audience: text("audience").notNull(),
+  deviceName: text("device_name"),
+  devicePlatform: text("device_platform"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at"),
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const authIdentities = pgTable("auth_identities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  providerSubject: text("provider_subject").notNull(),
+  providerEmail: text("provider_email"),
+  lastUsedAt: timestamp("last_used_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_auth_identities_provider_subject").on(table.provider, table.providerSubject),
+]);
+
+export const phoneOtpChallenges = pgTable("phone_otp_challenges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  phone: text("phone").notNull(),
+  purpose: text("purpose").notNull(),
+  audience: text("audience").notNull(),
+  role: text("role"),
+  name: text("name"),
+  codeHash: text("code_hash").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  expiresAt: timestamp("expires_at").notNull(),
+  resendAvailableAt: timestamp("resend_available_at").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const externalAuthTokens = pgTable("external_auth_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  provider: text("provider").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at").notNull().defaultNow(),
 });
 
 export const passwordResetTokens = pgTable("password_reset_tokens", {
@@ -815,10 +856,42 @@ export const pushNotifications = pgTable("push_notifications", {
   title: text("title").notNull(),
   body: text("body").notNull(),
   data: jsonb("data").$type<Record<string, any>>().default({}),
+  category: text("category").notNull().default("system"),
   status: text("status").notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  receiptId: text("receipt_id"),
+  lastError: text("last_error"),
   sentAt: timestamp("sent_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+export const pushDevices = pgTable("push_devices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expoPushToken: text("expo_push_token").notNull().unique(),
+  audience: text("audience").notNull(),
+  platform: text("platform").notNull(),
+  deviceName: text("device_name"),
+  enabled: boolean("enabled").notNull().default(true),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  orders: boolean("orders").notNull().default(true),
+  delivery: boolean("delivery").notNull().default(true),
+  payments: boolean("payments").notNull().default(true),
+  bookings: boolean("bookings").notNull().default(true),
+  messages: boolean("messages").notNull().default(true),
+  promotions: boolean("promotions").notNull().default(false),
+  security: boolean("security").notNull().default(true),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_notification_preferences_user_unique").on(table.userId),
+]);
 
 export const auditLogs = pgTable("audit_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1001,6 +1074,8 @@ export type CartItem = typeof cartItems.$inferSelect;
 export type WishlistItem = typeof wishlistItems.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
+export type AuthIdentity = typeof authIdentities.$inferSelect;
+export type PhoneOtpChallenge = typeof phoneOtpChallenges.$inferSelect;
 export type Address = typeof addresses.$inferSelect;
 export type ShopperProfile = typeof shopperProfiles.$inferSelect;
 export type VendorProfile = typeof vendorProfiles.$inferSelect;
@@ -1032,4 +1107,6 @@ export type EscrowTransaction = typeof escrowTransactions.$inferSelect;
 export type Settlement = typeof settlements.$inferSelect;
 export type ProfileCompletionCheck = typeof profileCompletionChecks.$inferSelect;
 export type PushNotification = typeof pushNotifications.$inferSelect;
+export type PushDevice = typeof pushDevices.$inferSelect;
+export type NotificationPreference = typeof notificationPreferences.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;

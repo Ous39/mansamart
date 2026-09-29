@@ -11,12 +11,13 @@ import {
   userActivity, flashDeals, addresses, shopperProfiles, vendorProfiles, providerProfiles, coupons, banners,
   wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
   orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, pushNotifications, auditLogs, orderVendorFulfillments, passwordResetTokens, adminMfaChallenges,
+  authIdentities, phoneOtpChallenges, externalAuthTokens, pushDevices, notificationPreferences,
 } from "@mansamart/database/schema";
 import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql, isNull } from "drizzle-orm";
 import {
   requireAuth, requireRole, optionalAuth,
   hashPassword, comparePassword, hashPin, comparePin,
-  createSession, deleteSession, getTokenFromRequest, getSession,
+  createSession, deleteSession, getTokenFromRequest, getSession, sessionMetadataFromRequest,
 } from "./auth";
 import { z } from "zod";
 import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
@@ -25,6 +26,11 @@ import { registerWhatsappRoutes } from "./whatsapp/routes";
 import { saveBase64Image } from "./upload-security";
 import { sendAdminLoginCode, sendPasswordResetEmail } from "./email";
 import { hashAdminMfaChallenge, isAdminMfaCodeValid, isAdminMfaRequired } from "./admin-mfa";
+import { generatePhoneOtp, hashPhoneOtp, normalizeGambianPhone, phoneOtpCanExposeDevelopmentCode, verifyPhoneOtp } from "./phone-auth";
+import { isPhoneOtpConfigured, sendPhoneOtp } from "./sms";
+import { identityTokenHash, verifyIdentityToken } from "./identity-providers";
+import { deliverPushNotification, pushAllowed } from "./push";
+import { isExpoPushToken, notificationCategory } from "./push-rules";
 import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
 import {
   VENDOR_FULFILLMENT_STATUSES,
@@ -57,6 +63,17 @@ function clientAudience(req: Request): ClientAudience | null {
 
 function roleAllowedForClient(req: Request, role: string): boolean {
   return roleAllowedForAudience(clientAudience(req), role);
+}
+
+function defaultRoleForAudience(audience: ClientAudience): "user" | "vendor" | "delivery_rider" {
+  if (audience === "rider") return "delivery_rider";
+  if (audience === "business") return "vendor";
+  return "user";
+}
+
+function internalIdentityEmail(provider: string, subject: string): string {
+  const key = crypto.createHash("sha256").update(`${provider}:${subject}`).digest("hex").slice(0, 32);
+  return `${provider}-${key}@identity.mansamart.invalid`;
 }
 
 const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -130,7 +147,7 @@ function safeSocketUser(user: any) {
 
 function safeUser(u: typeof users.$inferSelect) {
   const { password, pin, ...safe } = u;
-  return safe;
+  return { ...safe, email: safe.email.endsWith("@identity.mansamart.invalid") ? "" : safe.email };
 }
 
 function safeRiderProfile(profile: typeof deliveryRiders.$inferSelect) {
@@ -394,6 +411,7 @@ function generateOrderQrCode(orderId: string, purpose = "order") {
 
 async function notifyUser(userId: string | null | undefined, type: string, title: string, body: string, actionRoute?: string, data: Record<string, any> = {}) {
   if (!userId) return;
+  const category = notificationCategory(type);
   const [notification] = await db.insert(notifications).values({
     userId,
     type,
@@ -403,7 +421,16 @@ async function notifyUser(userId: string | null | undefined, type: string, title
     color: type === "delivery" ? "#E8813A" : type === "payment" ? "#0EA47A" : "#2563EB",
     actionRoute,
   }).returning().catch(() => [] as any[]);
-  await db.insert(pushNotifications).values({ userId, title, body, data: { ...data, actionRoute, type } }).catch(() => {});
+  if (await pushAllowed(userId, category).catch(() => category !== "promotions")) {
+    const [queued] = await db.insert(pushNotifications).values({
+      userId,
+      title,
+      body,
+      category,
+      data: { ...data, actionRoute, type },
+    }).returning().catch(() => [] as any[]);
+    if (queued?.id) void deliverPushNotification(queued.id).catch(() => {});
+  }
   emitRealtime("notification:new", { notification, data: { ...data, actionRoute, type } }, [`user:${userId}`]);
 }
 
@@ -677,7 +704,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!roleAllowedForClient(req, parsed.role)) {
         return res.status(403).json({ message: "This account type must be created in its dedicated MansaMart application." });
       }
-      const data = { ...parsed, email: parsed.email.trim().toLowerCase() };
+      const data = { ...parsed, email: parsed.email.trim().toLowerCase(), phone: parsed.phone ? normalizeGambianPhone(parsed.phone) : undefined };
       const existing = await db.select().from(users).where(eq(users.email, data.email)).limit(1);
       if (existing.length > 0) return res.status(409).json({ message: "Email already registered" });
 
@@ -689,7 +716,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await createDefaultProfiles(user);
 
-      const token = await createSession(user.id, clientAudience(req)!);
+      const token = await createSession(user.id, clientAudience(req)!, undefined, sessionMetadataFromRequest(req));
 
       // Send welcome notification
       await db.insert(notifications).values({
@@ -704,6 +731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(201).json({ token, user: safeUser(user) });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid data" });
+      if (err instanceof Error && /Gambian phone/.test(err.message)) return res.status(400).json({ message: err.message });
       console.error(err);
       return res.status(500).json({ message: "Server error" });
     }
@@ -743,7 +771,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await db.insert(auditLogs).values({ actorId: user.id, action: "admin_mfa_challenge_created", entityType: "admin_mfa_challenge", entityId: challengeId, metadata: { ip: req.ip } }).catch(() => {});
         return res.json({ mfaRequired: true, challengeId, expiresIn: 10 * 60 });
       }
-      const token = await createSession(user.id, "admin", 8 * 60 * 60 * 1000);
+      const token = await createSession(user.id, "admin", 8 * 60 * 60 * 1000, sessionMetadataFromRequest(req));
       await db.insert(auditLogs).values({ actorId: user.id, action: "admin_login", entityType: "session", metadata: { ip: req.ip } }).catch(() => {});
       return res.json({ token, user: safeUser(user), expiresIn: 8 * 60 * 60 });
     } catch (err: any) {
@@ -783,7 +811,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(and(eq(adminMfaChallenges.id, challengeId), isNull(adminMfaChallenges.usedAt)))
         .returning();
       if (!used) return res.status(409).json({ message: "Verification code was already used" });
-      const token = await createSession(row.user.id, "admin", 8 * 60 * 60 * 1000);
+      const token = await createSession(row.user.id, "admin", 8 * 60 * 60 * 1000, sessionMetadataFromRequest(req));
       await db.insert(auditLogs).values({ actorId: row.user.id, action: "admin_login_mfa", entityType: "session", metadata: { ip: req.ip, challengeId } }).catch(() => {});
       return res.json({ token, user: safeUser(row.user), expiresIn: 8 * 60 * 60 });
     } catch (err: any) {
@@ -815,11 +843,194 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Use the MansaMart application for your account type." });
       }
 
-      const token = await createSession(user.id, clientAudience(req)!);
+      const token = await createSession(user.id, clientAudience(req)!, undefined, sessionMetadataFromRequest(req));
+      await notifyUser(user.id, "security", "New sign-in", "A new MansaMart session was created with your password.", "/account-security");
       return res.json({ token, user: safeUser(user), hasPin: !!user.pin });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: "Invalid data" });
       return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/auth/phone/request", authRateLimit, async (req: Request, res: Response) => {
+    try {
+      const audience = clientAudience(req);
+      if (!audience || audience === "admin") return res.status(403).json({ message: "Phone sign-in is not available in this application" });
+      if (!isPhoneOtpConfigured()) return res.status(503).json({ message: "Phone verification is not configured yet" });
+      const parsed = z.object({
+        phone: z.string().min(7).max(30),
+        purpose: z.enum(["login", "register"]).default("login"),
+        role: z.enum(["user", "vendor", "service_provider", "delivery_rider"]).optional(),
+        name: z.string().trim().min(2).max(120).optional(),
+      }).parse(req.body);
+      const role = parsed.role || defaultRoleForAudience(audience);
+      if (!roleAllowedForAudience(audience, role)) return res.status(403).json({ message: "Use the MansaMart application for this account type" });
+      if (parsed.purpose === "register" && !parsed.name) return res.status(400).json({ message: "Your name is required to create an account" });
+      const phone = normalizeGambianPhone(parsed.phone);
+      const [recent] = await db.select().from(phoneOtpChallenges)
+        .where(and(eq(phoneOtpChallenges.phone, phone), eq(phoneOtpChallenges.audience, audience), isNull(phoneOtpChallenges.consumedAt)))
+        .orderBy(desc(phoneOtpChallenges.createdAt)).limit(1);
+      if (recent?.resendAvailableAt && recent.resendAvailableAt.getTime() > Date.now()) {
+        res.setHeader("Retry-After", Math.ceil((recent.resendAvailableAt.getTime() - Date.now()) / 1000));
+        return res.status(429).json({ message: "Please wait before requesting another code" });
+      }
+      const challengeId = crypto.randomUUID();
+      const code = generatePhoneOtp();
+      await db.insert(phoneOtpChallenges).values({
+        id: challengeId,
+        phone,
+        purpose: parsed.purpose,
+        audience,
+        role,
+        name: parsed.name || null,
+        codeHash: hashPhoneOtp(challengeId, code),
+        expiresAt: new Date(Date.now() + 10 * 60_000),
+        resendAvailableAt: new Date(Date.now() + 60_000),
+      });
+      try {
+        await sendPhoneOtp(phone, code);
+      } catch {
+        await db.delete(phoneOtpChallenges).where(eq(phoneOtpChallenges.id, challengeId));
+        return res.status(503).json({ message: "The verification code could not be delivered" });
+      }
+      return res.status(202).json({
+        challengeId,
+        expiresIn: 600,
+        resendAfter: 60,
+        ...(phoneOtpCanExposeDevelopmentCode() ? { developmentCode: code } : {}),
+      });
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message || "Invalid phone request" });
+      if (err instanceof Error && /Gambian phone/.test(err.message)) return res.status(400).json({ message: err.message });
+      return res.status(500).json({ message: "Phone verification could not be started" });
+    }
+  });
+
+  app.post("/api/auth/phone/verify", authRateLimit, async (req: Request, res: Response) => {
+    try {
+      const audience = clientAudience(req);
+      if (!audience || audience === "admin") return res.status(403).json({ message: "Phone sign-in is not available in this application" });
+      const { challengeId, code } = z.object({
+        challengeId: z.string().uuid(),
+        code: z.string().regex(/^\d{6}$/),
+      }).parse(req.body);
+      const [challenge] = await db.select().from(phoneOtpChallenges)
+        .where(and(eq(phoneOtpChallenges.id, challengeId), eq(phoneOtpChallenges.audience, audience), isNull(phoneOtpChallenges.consumedAt)))
+        .limit(1);
+      if (!challenge || challenge.expiresAt.getTime() <= Date.now() || challenge.attempts >= 5) {
+        return res.status(401).json({ message: "Invalid or expired verification code" });
+      }
+      if (!verifyPhoneOtp(challenge.id, code, challenge.codeHash)) {
+        await db.update(phoneOtpChallenges).set({ attempts: sql`${phoneOtpChallenges.attempts} + 1` }).where(eq(phoneOtpChallenges.id, challenge.id));
+        return res.status(401).json({ message: "Invalid or expired verification code" });
+      }
+      const [consumed] = await db.update(phoneOtpChallenges).set({ consumedAt: new Date() })
+        .where(and(eq(phoneOtpChallenges.id, challenge.id), isNull(phoneOtpChallenges.consumedAt))).returning();
+      if (!consumed) return res.status(409).json({ message: "This verification code was already used" });
+
+      const [phoneIdentity] = await db.select().from(authIdentities)
+        .where(and(eq(authIdentities.provider, "phone"), eq(authIdentities.providerSubject, challenge.phone))).limit(1);
+      let user: typeof users.$inferSelect | undefined;
+      if (phoneIdentity) [user] = await db.select().from(users).where(eq(users.id, phoneIdentity.userId)).limit(1);
+      if (!user) {
+        const phoneMatches = await db.select().from(users).where(eq(users.phone, challenge.phone)).limit(2);
+        if (phoneMatches.length > 0) return res.status(409).json({ message: "This phone is attached to an account but has not been verified for phone sign-in. Use your password or contact MansaMart support." });
+      }
+      let created = false;
+      if (!user) {
+        if (challenge.purpose !== "register") return res.status(404).json({ message: "No MansaMart account uses this phone number" });
+        const role = challenge.role || defaultRoleForAudience(audience);
+        if (!roleAllowedForAudience(audience, role)) return res.status(403).json({ message: "Use the MansaMart application for this account type" });
+        const password = await hashPassword(crypto.randomBytes(48).toString("base64url"));
+        [user] = await db.insert(users).values({
+          email: internalIdentityEmail("phone", challenge.phone),
+          password,
+          name: challenge.name || "MansaMart member",
+          phone: challenge.phone,
+          role: role as any,
+          businessName: role === "vendor" || role === "service_provider" ? challenge.name : null,
+        }).returning();
+        created = true;
+      }
+      if (user.role === "admin" || !roleAllowedForAudience(audience, user.role)) {
+        return res.status(403).json({ message: "Use the MansaMart application for your account type" });
+      }
+      if (created) await createDefaultProfiles(user);
+      await db.insert(authIdentities).values({ userId: user.id, provider: "phone", providerSubject: challenge.phone }).onConflictDoNothing();
+      await db.update(authIdentities).set({ lastUsedAt: new Date() })
+        .where(and(eq(authIdentities.provider, "phone"), eq(authIdentities.providerSubject, challenge.phone))).catch(() => {});
+      const token = await createSession(user.id, audience, undefined, sessionMetadataFromRequest(req));
+      await notifyUser(user.id, "security", "Phone sign-in", "A new session was created after phone verification.", "/account-security");
+      return res.status(created ? 201 : 200).json({ token, user: safeUser(user), hasPin: !!user.pin, created });
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: "Enter the six-digit verification code" });
+      return res.status(500).json({ message: "Phone verification failed" });
+    }
+  });
+
+  app.post("/api/auth/social", authRateLimit, async (req: Request, res: Response) => {
+    try {
+      const audience = clientAudience(req);
+      if (!audience || audience === "admin") return res.status(403).json({ message: "Social sign-in is not available in this application" });
+      const parsed = z.object({
+        provider: z.enum(["google", "apple"]),
+        idToken: z.string().min(100).max(10_000),
+        nonce: z.string().min(16).max(256).optional(),
+        role: z.enum(["user", "vendor", "service_provider", "delivery_rider"]).optional(),
+        name: z.string().trim().min(2).max(120).optional(),
+      }).parse(req.body);
+      const identity = await verifyIdentityToken(parsed.provider, parsed.idToken, parsed.nonce);
+      const replayHash = identityTokenHash(parsed.idToken);
+      try {
+        await db.insert(externalAuthTokens).values({ provider: parsed.provider, tokenHash: replayHash, expiresAt: identity.expiresAt });
+      } catch (error: any) {
+        if (error?.code === "23505") return res.status(409).json({ message: "This identity token was already used. Please sign in again." });
+        throw error;
+      }
+
+      const [existingIdentity] = await db.select().from(authIdentities)
+        .where(and(eq(authIdentities.provider, parsed.provider), eq(authIdentities.providerSubject, identity.subject))).limit(1);
+      let user: typeof users.$inferSelect | undefined;
+      let created = false;
+      if (existingIdentity) {
+        [user] = await db.select().from(users).where(eq(users.id, existingIdentity.userId)).limit(1);
+      } else if (identity.email && identity.emailVerified) {
+        [user] = await db.select().from(users).where(eq(users.email, identity.email)).limit(1);
+      }
+      if (!user) {
+        const role = parsed.role || defaultRoleForAudience(audience);
+        if (!roleAllowedForAudience(audience, role)) return res.status(403).json({ message: "Use the MansaMart application for this account type" });
+        if (!identity.email || !identity.emailVerified) return res.status(400).json({ message: "The identity provider must share a verified email when creating an account" });
+        const password = await hashPassword(crypto.randomBytes(48).toString("base64url"));
+        [user] = await db.insert(users).values({
+          email: identity.email,
+          password,
+          name: parsed.name || identity.name || "MansaMart member",
+          role: role as any,
+          businessName: role === "vendor" || role === "service_provider" ? (parsed.name || identity.name) : null,
+        }).returning();
+        created = true;
+      }
+      if (user.role === "admin" || !roleAllowedForAudience(audience, user.role)) {
+        return res.status(403).json({ message: "Use the MansaMart application for your account type" });
+      }
+      await db.insert(authIdentities).values({
+        userId: user.id,
+        provider: parsed.provider,
+        providerSubject: identity.subject,
+        providerEmail: identity.email,
+      }).onConflictDoNothing();
+      await db.update(authIdentities).set({ lastUsedAt: new Date(), providerEmail: identity.email })
+        .where(and(eq(authIdentities.provider, parsed.provider), eq(authIdentities.providerSubject, identity.subject)));
+      if (created) await createDefaultProfiles(user);
+      const token = await createSession(user.id, audience, undefined, sessionMetadataFromRequest(req));
+      await notifyUser(user.id, "security", `${parsed.provider === "apple" ? "Apple" : "Google"} sign-in`, "A new session was created using your connected identity.", "/account-security");
+      return res.status(created ? 201 : 200).json({ token, user: safeUser(user), hasPin: !!user.pin, created });
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message || "Invalid sign-in request" });
+      if (err instanceof Error && /not configured|keys are unavailable/.test(err.message)) return res.status(503).json({ message: err.message });
+      if (err instanceof Error && /identity token|signing key|nonce/.test(err.message)) return res.status(401).json({ message: err.message });
+      return res.status(500).json({ message: "Social sign-in failed" });
     }
   });
 
@@ -918,6 +1129,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         avatar: z.string().optional(),
       });
       const data = schema.parse(req.body);
+      if (data.phone) data.phone = normalizeGambianPhone(data.phone);
       if (isPersonalProfileLocked(user)) {
         const updated = await submitPersonalProfileChange(user, data);
         return res.json({ user: safeUser(updated), changeRequestSubmitted: true, message: "Your verified personal profile is locked. Changes were submitted for admin approval." });
@@ -926,6 +1138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ user: safeUser(updated) });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message });
+      if (err instanceof Error && /Gambian phone/.test(err.message)) return res.status(400).json({ message: err.message });
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -934,6 +1147,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const token = getTokenFromRequest(req);
     if (token) await deleteSession(token);
     return res.json({ success: true });
+  });
+
+  app.get("/api/auth/sessions", requireAuth, async (req: Request, res: Response) => {
+    const user = (req as any).user as typeof users.$inferSelect;
+    const current = (req as any).session as typeof sessions.$inferSelect;
+    const rows = await db.select({
+      id: sessions.id,
+      audience: sessions.audience,
+      deviceName: sessions.deviceName,
+      devicePlatform: sessions.devicePlatform,
+      ipAddress: sessions.ipAddress,
+      userAgent: sessions.userAgent,
+      lastSeenAt: sessions.lastSeenAt,
+      expiresAt: sessions.expiresAt,
+      createdAt: sessions.createdAt,
+    }).from(sessions).where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())))
+      .orderBy(desc(sessions.lastSeenAt));
+    return res.json(rows.map(row => ({ ...row, current: row.id === current.id })));
+  });
+
+  app.delete("/api/auth/sessions/:id", requireAuth, async (req: Request, res: Response) => {
+    const user = (req as any).user as typeof users.$inferSelect;
+    const sessionId = param(req, "id");
+    const [revoked] = await db.update(sessions).set({ revokedAt: new Date() })
+      .where(and(eq(sessions.id, sessionId), eq(sessions.userId, user.id), isNull(sessions.revokedAt))).returning({ id: sessions.id });
+    if (!revoked) return res.status(404).json({ message: "Session not found" });
+    await audit(user.id, "session.revoked", "session", sessionId, { current: sessionId === (req as any).session?.id });
+    return res.json({ success: true });
+  });
+
+  app.delete("/api/auth/sessions", requireAuth, async (req: Request, res: Response) => {
+    const user = (req as any).user as typeof users.$inferSelect;
+    const current = (req as any).session as typeof sessions.$inferSelect;
+    const revoked = await db.update(sessions).set({ revokedAt: new Date() })
+      .where(and(eq(sessions.userId, user.id), ne(sessions.id, current.id), isNull(sessions.revokedAt)))
+      .returning({ id: sessions.id });
+    await audit(user.id, "sessions.revoked_others", "session", current.id, { count: revoked.length });
+    return res.json({ success: true, revoked: revoked.length });
   });
 
   // ────────────────────────────────────────────────────────────────
@@ -1818,6 +2069,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/notifications/read-all", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     await db.update(notifications).set({ isRead: true }).where(eq(notifications.userId, user.id));
+    return res.json({ success: true });
+  });
+
+  app.get("/api/notifications/preferences", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
+    const user = (req as any).user as typeof users.$inferSelect;
+    let [preference] = await db.select().from(notificationPreferences).where(eq(notificationPreferences.userId, user.id)).limit(1);
+    if (!preference) {
+      [preference] = await db.insert(notificationPreferences).values({ userId: user.id }).returning();
+    }
+    return res.json(preference);
+  });
+
+  app.put("/api/notifications/preferences", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as typeof users.$inferSelect;
+      const values = z.object({
+        orders: z.boolean().optional(),
+        delivery: z.boolean().optional(),
+        payments: z.boolean().optional(),
+        bookings: z.boolean().optional(),
+        messages: z.boolean().optional(),
+        promotions: z.boolean().optional(),
+        security: z.boolean().optional(),
+      }).strict().parse(req.body);
+      const [updated] = await db.insert(notificationPreferences).values({ userId: user.id, ...values, updatedAt: new Date() })
+        .onConflictDoUpdate({ target: notificationPreferences.userId, set: { ...values, updatedAt: new Date() } }).returning();
+      return res.json(updated);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: "Invalid notification preferences" });
+      return res.status(500).json({ message: "Notification preferences could not be saved" });
+    }
+  });
+
+  app.get("/api/notifications/devices", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
+    const user = (req as any).user as typeof users.$inferSelect;
+    const rows = await db.select({
+      id: pushDevices.id,
+      audience: pushDevices.audience,
+      platform: pushDevices.platform,
+      deviceName: pushDevices.deviceName,
+      enabled: pushDevices.enabled,
+      lastSeenAt: pushDevices.lastSeenAt,
+      createdAt: pushDevices.createdAt,
+    }).from(pushDevices).where(eq(pushDevices.userId, user.id)).orderBy(desc(pushDevices.lastSeenAt));
+    return res.json(rows);
+  });
+
+  app.post("/api/notifications/devices", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as typeof users.$inferSelect;
+      const session = (req as any).session as typeof sessions.$inferSelect;
+      const { expoPushToken, platform, deviceName } = z.object({
+        expoPushToken: z.string().min(20).max(300),
+        platform: z.enum(["ios", "android"]),
+        deviceName: z.string().trim().min(1).max(120).optional(),
+      }).parse(req.body);
+      if (!isExpoPushToken(expoPushToken)) return res.status(400).json({ message: "Invalid Expo push token" });
+      const [device] = await db.insert(pushDevices).values({
+        userId: user.id,
+        expoPushToken,
+        audience: session.audience,
+        platform,
+        deviceName: deviceName || session.deviceName,
+        enabled: true,
+        lastSeenAt: new Date(),
+        updatedAt: new Date(),
+      }).onConflictDoUpdate({
+        target: pushDevices.expoPushToken,
+        set: { userId: user.id, audience: session.audience, platform, deviceName: deviceName || session.deviceName, enabled: true, lastSeenAt: new Date(), updatedAt: new Date() },
+      }).returning({ id: pushDevices.id, enabled: pushDevices.enabled });
+      return res.status(201).json(device);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message || "Invalid push device" });
+      return res.status(500).json({ message: "Push device could not be registered" });
+    }
+  });
+
+  app.delete("/api/notifications/devices/:id", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
+    const user = (req as any).user as typeof users.$inferSelect;
+    const [disabled] = await db.update(pushDevices).set({ enabled: false, updatedAt: new Date() })
+      .where(and(eq(pushDevices.id, param(req, "id")), eq(pushDevices.userId, user.id))).returning({ id: pushDevices.id });
+    if (!disabled) return res.status(404).json({ message: "Push device not found" });
     return res.json({ success: true });
   });
 

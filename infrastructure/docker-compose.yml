@@ -46,6 +46,15 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-MansaMart <no-reply@mansamart.gm>}
+      PHONE_OTP_ENABLED: ${PHONE_OTP_ENABLED:-false}
+      PHONE_OTP_PEPPER: ${PHONE_OTP_PEPPER:-}
+      PHONE_OTP_DEV_EXPOSE_CODE: ${PHONE_OTP_DEV_EXPOSE_CODE:-false}
+      SMS_PROVIDER_URL: ${SMS_PROVIDER_URL:-}
+      SMS_PROVIDER_TOKEN: ${SMS_PROVIDER_TOKEN:-}
+      SMS_SENDER_ID: ${SMS_SENDER_ID:-MansaMart}
+      GOOGLE_CLIENT_IDS: ${GOOGLE_CLIENT_IDS:-}
+      APPLE_CLIENT_IDS: ${APPLE_CLIENT_IDS:-gm.mansamart.customer,gm.mansamart.business,gm.mansamart.rider}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
       SEED_ON_START: ${SEED_ON_START:-true}
       WAVE_ENABLED: ${WAVE_ENABLED:-false}
       WAVE_GMD_CONFIRMED: ${WAVE_GMD_CONFIRMED:-false}
@@ -71,6 +80,9 @@ services:
       APP_PACKAGE: "@mansamart/customer-mobile"
       EXPO_PUBLIC_APP_AUDIENCE: customer
       EXPO_PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${GOOGLE_CUSTOMER_WEB_CLIENT_ID:-}
+      EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: ${GOOGLE_CUSTOMER_ANDROID_CLIENT_ID:-}
+      EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ${GOOGLE_CUSTOMER_IOS_CLIENT_ID:-}
     ports: ["8081:8081"]
     depends_on: [api]
 
@@ -81,6 +93,9 @@ services:
       APP_PACKAGE: "@mansamart/business-mobile"
       EXPO_PUBLIC_APP_AUDIENCE: business
       EXPO_PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${GOOGLE_BUSINESS_WEB_CLIENT_ID:-}
+      EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: ${GOOGLE_BUSINESS_ANDROID_CLIENT_ID:-}
+      EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ${GOOGLE_BUSINESS_IOS_CLIENT_ID:-}
     ports: ["8082:8082"]
     depends_on: [api]
 
@@ -91,6 +106,9 @@ services:
       APP_PACKAGE: "@mansamart/rider-mobile"
       EXPO_PUBLIC_APP_AUDIENCE: rider
       EXPO_PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${GOOGLE_RIDER_WEB_CLIENT_ID:-}
+      EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: ${GOOGLE_RIDER_ANDROID_CLIENT_ID:-}
+      EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ${GOOGLE_RIDER_IOS_CLIENT_ID:-}
     ports: ["8083:8083"]
     depends_on: [api]
 

@@ -29,12 +29,12 @@ function useRemote<T>(path: string | null) {
 
 function PortalShell({ user, active, navigate, children }: { user: User; active: string; navigate: Navigate; children: ReactNode }) {
   const items = user.role === "user"
-    ? [["Overview", "/account"], ["Orders", "/orders"], ["Bookings", "/bookings"], ["Cart", "/cart"], ["Notifications", "/notifications"], ["Support", "/support"]]
+    ? [["Overview", "/account"], ["Orders", "/orders"], ["Bookings", "/bookings"], ["Cart", "/cart"], ["Notifications", "/notifications"], ["Security", "/security"], ["Support", "/support"]]
     : user.role === "vendor"
-      ? [["Overview", "/vendor"], ["Orders", "/orders"], ["Products", "/vendor/products"], ["Finance", "/finance"], ["Returns", "/returns"], ["Support", "/support"]]
+      ? [["Overview", "/vendor"], ["Orders", "/orders"], ["Products", "/vendor/products"], ["Finance", "/finance"], ["Returns", "/returns"], ["Notifications", "/notifications"], ["Security", "/security"], ["Support", "/support"]]
       : user.role === "service_provider"
-        ? [["Overview", "/provider"], ["Bookings", "/bookings"], ["Services", "/provider/services"], ["Finance", "/finance"], ["Notifications", "/notifications"], ["Support", "/support"]]
-        : [["Overview", "/rider"], ["Deliveries", "/rider/deliveries"], ["Notifications", "/notifications"], ["Support", "/support"]];
+        ? [["Overview", "/provider"], ["Bookings", "/bookings"], ["Services", "/provider/services"], ["Finance", "/finance"], ["Notifications", "/notifications"], ["Security", "/security"], ["Support", "/support"]]
+        : [["Overview", "/rider"], ["Deliveries", "/rider/deliveries"], ["Notifications", "/notifications"], ["Security", "/security"], ["Support", "/support"]];
   return <main className="portal-layout"><aside className="portal-nav"><div className="portal-person"><span>{user.name.slice(0, 1).toUpperCase()}</span><div><b>{user.name}</b><small>{roleLabel(user.role)}</small></div></div><nav>{items.map(([name, path]) => <AppLink key={path} to={path} navigate={navigate} className={active === path ? "active" : ""}>{name}</AppLink>)}</nav><div className="portal-security"><Icon name="shield"/><span>Protected by role-based access</span></div></aside><section className="portal-content">{children}</section></main>;
 }
 
@@ -197,8 +197,20 @@ export function CartPage(props: ProtectedPageProps) {
 
 export function NotificationsPage(props: ProtectedPageProps) {
   const remote = useRemote<Notification[]>("/api/notifications");
+  const preferences = useRemote<Record<string, boolean>>("/api/notifications/preferences");
   const markAll = async () => { await api.request("/api/notifications/read-all", { method: "PUT" }); props.notify("Notifications marked as read", "success"); await remote.reload(); };
-  return <PortalShell user={props.user} active="/notifications" navigate={props.navigate}><PageHeader eyebrow="UPDATES" title="Notifications" body="Orders, bookings, payments and account updates." actions={<Button className="secondary" onClick={markAll}>Mark all read</Button>}/><ErrorNotice message={remote.error}/>{remote.loading ? <Spinner/> : !(remote.data || []).length ? <Empty title="No notifications" body="Important account updates will appear here."/> : <div className="notification-list">{remote.data!.map((item) => <article className={item.isRead ? "" : "unread"} key={item.id}><span className="notification-icon"><Icon name={item.type === "booking" ? "calendar" : item.type === "delivery" ? "bike" : "bell"}/></span><div><h3>{item.title}</h3><p>{item.body}</p><small>{dateTime(item.createdAt)}</small></div>{!item.isRead && <i/>}</article>)}</div>}</PortalShell>;
+  const toggle = async (key: string, value: boolean) => { await api.request("/api/notifications/preferences", { method: "PUT", body: JSON.stringify({ [key]: value }) }); await preferences.reload(); };
+  const preferenceLabels: Record<string, string> = { orders: "Orders", delivery: "Delivery", payments: "Payments", bookings: "Bookings", messages: "Messages & support", promotions: "Deals & promotions", security: "Security" };
+  return <PortalShell user={props.user} active="/notifications" navigate={props.navigate}><PageHeader eyebrow="UPDATES" title="Notifications" body="Orders, bookings, payments and account updates." actions={<><Button className="secondary" onClick={() => props.navigate("/security")}>Signed-in devices</Button><Button className="secondary" onClick={markAll}>Mark all read</Button></>}/><ErrorNotice message={remote.error || preferences.error}/><section className="panel preference-panel"><div className="panel-title"><div><h2>Push preferences</h2><p>Promotional alerts are off by default. Important updates remain available here.</p></div></div>{preferences.loading ? <Spinner/> : <div className="preference-grid">{Object.entries(preferenceLabels).map(([key, title]) => <label key={key}><span>{title}</span><input type="checkbox" checked={Boolean(preferences.data?.[key])} onChange={(event) => void toggle(key, event.target.checked)}/></label>)}</div>}</section>{remote.loading ? <Spinner/> : !(remote.data || []).length ? <Empty title="No notifications" body="Important account updates will appear here."/> : <div className="notification-list">{remote.data!.map((item) => <article className={item.isRead ? "" : "unread"} key={item.id}><span className="notification-icon"><Icon name={item.type === "booking" ? "calendar" : item.type === "delivery" ? "bike" : "bell"}/></span><div><h3>{item.title}</h3><p>{item.body}</p><small>{dateTime(item.createdAt)}</small></div>{!item.isRead && <i/>}</article>)}</div>}</PortalShell>;
+}
+
+type ActiveSession = { id: string; audience: string; deviceName?: string | null; devicePlatform?: string | null; userAgent?: string | null; lastSeenAt: string; expiresAt: string; current: boolean };
+
+export function SecurityPage(props: ProtectedPageProps) {
+  const remote = useRemote<ActiveSession[]>("/api/auth/sessions");
+  const revoke = async (id: string) => { await api.request(`/api/auth/sessions/${id}`, { method: "DELETE" }); props.notify("Session revoked", "success"); await remote.reload(); };
+  const revokeOthers = async () => { const result = await api.request<{ revoked: number }>("/api/auth/sessions", { method: "DELETE" }); props.notify(`${result.revoked} other session(s) revoked`, "success"); await remote.reload(); };
+  return <PortalShell user={props.user} active="/security" navigate={props.navigate}><PageHeader eyebrow="ACCOUNT SECURITY" title="Signed-in devices" body="Review active sessions and revoke any device you do not recognize." actions={<Button className="secondary" onClick={revokeOthers}>Sign out other devices</Button>}/><ErrorNotice message={remote.error}/>{remote.loading ? <Spinner/> : <div className="stack-list">{(remote.data || []).map((session) => <article className="panel session-card" key={session.id}><span className="notification-icon"><Icon name="shield"/></span><div><h3>{session.deviceName || session.userAgent?.split(" ")[0] || label(session.audience)} {session.current && <Status value="current"/>}</h3><p>{label(session.audience)} · {label(session.devicePlatform || "unknown device")}</p><small>Last active {dateTime(session.lastSeenAt)} · Expires {dateTime(session.expiresAt)}</small></div>{!session.current && <Button className="danger small" onClick={() => revoke(session.id)}>Revoke</Button>}</article>)}</div>}</PortalShell>;
 }
 
 export function SupportPage(props: ProtectedPageProps) {

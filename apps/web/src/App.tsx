@@ -3,7 +3,7 @@ import { roleLabel } from "@mansamart/authentication";
 import type { AuthResponse } from "@mansamart/shared-types";
 import { api, tokenStore } from "./api";
 import { AppLink, Button, Icon, Spinner, type Navigate } from "./components";
-import { BookingsPage, CartPage, CustomerAccount, FinancePage, NotificationsPage, OrderDetailPage, OrdersPage, ProviderDashboard, ProviderServicesPage, ReturnsPage, RiderDashboard, RiderDeliveriesPage, SupportPage, VendorDashboard, VendorProductsPage } from "./account-pages";
+import { BookingsPage, CartPage, CustomerAccount, FinancePage, NotificationsPage, OrderDetailPage, OrdersPage, ProviderDashboard, ProviderServicesPage, ReturnsPage, RiderDashboard, RiderDeliveriesPage, SecurityPage, SupportPage, VendorDashboard, VendorProductsPage } from "./account-pages";
 import { HomePage, PaymentReturn, PolicyPage, ProductDetailPage, ServiceDetailPage, ServicesPage, ShopPage } from "./marketplace-pages";
 import type { CartRow, Product, Service, User } from "./types";
 import { defaultWebPath, roleCanUseGeneralWeb, safeInternalPath } from "./web-rules";
@@ -143,13 +143,14 @@ function renderProtectedRoute(routePath: string, props: ProtectedProps) {
   if (routePath === "/returns" && user.role === "vendor") return <ReturnsPage {...props}/>;
   if (routePath === "/rider/deliveries" && user.role === "delivery_rider") return <RiderDeliveriesPage {...props}/>;
   if (routePath === "/notifications") return <NotificationsPage {...props}/>;
+  if (routePath === "/security") return <SecurityPage {...props}/>;
   if (routePath === "/support") return <SupportPage {...props}/>;
   const dashboard = roleCanUseGeneralWeb(user.role) ? defaultWebPath(user.role) : "/";
   return <main className="gate-page"><Icon name="shield"/><h1>This page is not for your account role.</h1><p>Your {roleLabel(user.role).toLowerCase()} account remains protected from other role areas.</p><Button onClick={() => navigate(dashboard)}>Open my dashboard</Button></main>;
 }
 
 function isProtectedRoute(path: string) {
-  return ["/account", "/vendor", "/provider", "/rider", "/orders", "/bookings", "/cart", "/finance", "/returns", "/notifications", "/support"].some((root) => path === root || path.startsWith(`${root}/`));
+  return ["/account", "/vendor", "/provider", "/rider", "/orders", "/bookings", "/cart", "/finance", "/returns", "/notifications", "/security", "/support"].some((root) => path === root || path.startsWith(`${root}/`));
 }
 
 function Header({ user, cartCount, navigate, openAuth, logout, mobileOpen, setMobileOpen }: { user: User | null; cartCount: number; navigate: Navigate; openAuth: (mode?: AuthMode, returnTo?: string) => void; logout: () => void; mobileOpen: boolean; setMobileOpen: (open: boolean) => void }) {
@@ -166,6 +167,12 @@ function AuthModal({ mode, setMode, close, finish }: { mode: AuthMode; setMode: 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState("user");
+  const [method, setMethod] = useState<"password" | "phone">("password");
+  const [phone, setPhone] = useState("+220");
+  const [name, setName] = useState("");
+  const [challengeId, setChallengeId] = useState("");
+  const [code, setCode] = useState("");
+  const [developmentCode, setDevelopmentCode] = useState("");
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(""); setBusy(true); const form = new FormData(event.currentTarget);
     try {
@@ -176,7 +183,43 @@ function AuthModal({ mode, setMode, close, finish }: { mode: AuthMode; setMode: 
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Authentication failed"); }
     finally { setBusy(false); }
   };
-  return <div className="modal-backdrop" onMouseDown={close}><form className="modal-card auth-card" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}><button type="button" className="modal-close" onClick={close}><Icon name="close"/></button><span className="brand-mark large">M</span><h2>{mode === "login" ? "Welcome back" : "Join MansaMart"}</h2><p>{mode === "login" ? "Sign in as a customer, vendor, provider or rider." : "Choose the account that matches how you will use the marketplace."}</p><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>Sign in</button><button type="button" className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Register</button></div>{error && <div className="notice error-notice" role="alert">{error}</div>}{mode === "register" && <><div className="role-picker"><button type="button" className={role === "user" ? "active" : ""} onClick={() => setRole("user")}><Icon name="user"/>Customer</button><button type="button" className={role === "vendor" ? "active" : ""} onClick={() => setRole("vendor")}><Icon name="store"/>Vendor</button><button type="button" className={role === "service_provider" ? "active" : ""} onClick={() => setRole("service_provider")}><Icon name="briefcase"/>Provider</button><button type="button" className={role === "delivery_rider" ? "active" : ""} onClick={() => setRole("delivery_rider")}><Icon name="bike"/>Rider</button></div><label>Full name<input name="name" autoComplete="name" minLength={2} required/></label>{role !== "user" && role !== "delivery_rider" && <label>Business name<input name="businessName" minLength={2} required/></label>}{role !== "user" && role !== "delivery_rider" && <label>Business type<input name="businessType" placeholder={role === "vendor" ? "Fashion, electronics, grocery…" : "Cleaning, repairs, beauty…"} required/></label>}<div className="form-grid"><label>Phone<input name="phone" type="tel" autoComplete="tel"/></label><label>City / area<input name="city" autoComplete="address-level2"/></label></div></>}<label>Email<input name="email" type="email" autoComplete="email" required/></label><label>Password<input name="password" type="password" minLength={mode === "register" ? 8 : 1} maxLength={128} autoComplete={mode === "login" ? "current-password" : "new-password"} required/></label>{mode === "login" && <button type="button" className="text-link" onClick={() => { close(); window.location.assign("/forgot-password"); }}>Forgot password?</button>}<Button type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : "Create account"}</Button><small>Administrator accounts are rejected here. Admins must use admin.mansamart.gm.</small></form></div>;
+  const requestPhoneCode = async () => {
+    setBusy(true); setError("");
+    try {
+      const result = await api.request<{ challengeId: string; developmentCode?: string }>("/api/auth/phone/request", {
+        method: "POST",
+        body: JSON.stringify({ phone, purpose: mode, role, name: mode === "register" ? name : undefined }),
+      });
+      setChallengeId(result.challengeId); setDevelopmentCode(result.developmentCode || "");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Phone verification failed"); }
+    finally { setBusy(false); }
+  };
+  const verifyPhoneCode = async () => {
+    setBusy(true); setError("");
+    try {
+      const result = await api.request<AuthResponse>("/api/auth/phone/verify", { method: "POST", body: JSON.stringify({ challengeId, code }) });
+      finish(result);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Phone verification failed"); }
+    finally { setBusy(false); }
+  };
+  const chooseMode = (next: AuthMode) => { setMode(next); setError(""); setChallengeId(""); setCode(""); };
+  return <div className="modal-backdrop" onMouseDown={close}><form className="modal-card auth-card" onSubmit={method === "password" ? submit : (event) => event.preventDefault()} onMouseDown={(event) => event.stopPropagation()}>
+    <button type="button" className="modal-close" onClick={close}><Icon name="close"/></button><span className="brand-mark large">M</span>
+    <h2>{mode === "login" ? "Welcome back" : "Join MansaMart"}</h2><p>{method === "phone" ? "Use a secure one-time code sent to your Gambian phone number." : mode === "login" ? "Sign in as a customer, vendor, provider or rider." : "Choose the account that matches how you will use the marketplace."}</p>
+    <div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => chooseMode("login")}>Sign in</button><button type="button" className={mode === "register" ? "active" : ""} onClick={() => chooseMode("register")}>Register</button></div>
+    {error && <div className="notice error-notice" role="alert">{error}</div>}
+    {mode === "register" && <><div className="role-picker"><button type="button" className={role === "user" ? "active" : ""} onClick={() => setRole("user")}><Icon name="user"/>Customer</button><button type="button" className={role === "vendor" ? "active" : ""} onClick={() => setRole("vendor")}><Icon name="store"/>Vendor</button><button type="button" className={role === "service_provider" ? "active" : ""} onClick={() => setRole("service_provider")}><Icon name="briefcase"/>Provider</button><button type="button" className={role === "delivery_rider" ? "active" : ""} onClick={() => setRole("delivery_rider")}><Icon name="bike"/>Rider</button></div>{method === "phone" && <label>Full name<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" minLength={2} required/></label>}</>}
+    {method === "password" ? <>
+      {mode === "register" && <><label>Full name<input name="name" autoComplete="name" minLength={2} required/></label>{role !== "user" && role !== "delivery_rider" && <label>Business name<input name="businessName" minLength={2} required/></label>}{role !== "user" && role !== "delivery_rider" && <label>Business type<input name="businessType" required/></label>}<div className="form-grid"><label>Phone<input name="phone" type="tel" autoComplete="tel"/></label><label>City / area<input name="city" autoComplete="address-level2"/></label></div></>}
+      <label>Email<input name="email" type="email" autoComplete="email" required/></label><label>Password<input name="password" type="password" minLength={mode === "register" ? 8 : 1} maxLength={128} autoComplete={mode === "login" ? "current-password" : "new-password"} required/></label>
+      {mode === "login" && <button type="button" className="text-link" onClick={() => { close(); window.location.assign("/forgot-password"); }}>Forgot password?</button>}<Button type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : "Create account"}</Button>
+      <button type="button" className="auth-alt-button" onClick={() => { setMethod("phone"); setError(""); }}>Continue with phone</button>
+    </> : <>
+      {!challengeId ? <><label>Gambian phone number<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" placeholder="+220 123 456 789"/></label><Button type="button" disabled={busy || (mode === "register" && name.trim().length < 2)} onClick={requestPhoneCode}>{busy ? "Sending…" : "Send verification code"}</Button></> : <><label>Six-digit code<input inputMode="numeric" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" maxLength={6}/></label>{developmentCode && <div className="notice">Development code: {developmentCode}</div>}<Button type="button" disabled={busy || code.length !== 6} onClick={verifyPhoneCode}>{busy ? "Verifying…" : "Verify and continue"}</Button></>}
+      <button type="button" className="auth-alt-button" onClick={() => { setMethod("password"); setChallengeId(""); setError(""); }}>Use email and password</button>
+    </>}
+    <small>Administrator accounts are rejected here. Admins must use admin.mansamart.gm.</small>
+  </form></div>;
 }
 
 function ForgotPasswordPage({ navigate }: { navigate: Navigate }) {

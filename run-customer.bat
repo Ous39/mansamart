@@ -138,11 +138,16 @@ if defined CUSTOM_IP set "LAN_IP=%CUSTOM_IP%"
 
 set "EXPO_PUBLIC_APP_AUDIENCE=customer"
 set "EXPO_PUBLIC_API_URL=http://%LAN_IP%:5000"
+for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /C:"GOOGLE_CUSTOMER_WEB_CLIENT_ID=" /C:"GOOGLE_CUSTOMER_ANDROID_CLIENT_ID=" /C:"GOOGLE_CUSTOMER_IOS_CLIENT_ID=" "%ENV_FILE%"`) do set "%%A=%%B"
+set "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=%GOOGLE_CUSTOMER_WEB_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=%GOOGLE_CUSTOMER_ANDROID_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=%GOOGLE_CUSTOMER_IOS_CLIENT_ID%"
 
 echo.
 echo API used by the phone: %EXPO_PUBLIC_API_URL%
 echo Make sure the phone and computer use the same Wi-Fi.
 echo Open Expo Go and scan the QR code that appears below.
+echo Google, Apple, and remote push require an EAS development build.
 echo Press Ctrl+C when you want to stop the Expo server.
 echo.
 call %PNPM_CMD% --filter @mansamart/customer-mobile exec expo start --host lan --port 8081 --clear
@@ -154,6 +159,10 @@ if errorlevel 1 goto :failed
 
 set "EXPO_PUBLIC_APP_AUDIENCE=customer"
 set "EXPO_PUBLIC_API_URL=http://127.0.0.1:5000"
+for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /C:"GOOGLE_CUSTOMER_WEB_CLIENT_ID=" /C:"GOOGLE_CUSTOMER_ANDROID_CLIENT_ID=" /C:"GOOGLE_CUSTOMER_IOS_CLIENT_ID=" "%ENV_FILE%"`) do set "%%A=%%B"
+set "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=%GOOGLE_CUSTOMER_WEB_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=%GOOGLE_CUSTOMER_ANDROID_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=%GOOGLE_CUSTOMER_IOS_CLIENT_ID%"
 
 echo.
 echo Opening the Customer app at http://localhost:8081 ...

@@ -1,6 +1,8 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { getToken } from "@/lib/auth-token";
 import { API_BASE_URL } from "@/lib/config";
+import { Platform } from "react-native";
+import * as Device from "expo-device";
 
 export function getApiUrl(): string {
   return API_BASE_URL;
@@ -10,6 +12,8 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const token = getToken();
   const headers: Record<string, string> = {
     "X-MansaMart-App": process.env.EXPO_PUBLIC_APP_AUDIENCE || "business",
+    "X-Device-Platform": Platform.OS,
+    "X-Device-Name": Device.modelName || Device.deviceName || `${Platform.OS} device`,
     ...extra,
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;

@@ -50,7 +50,7 @@ function setupCors() {
       res.header("Access-Control-Allow-Origin", origin);
       res.header("Vary", "Origin");
       res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-MansaMart-App");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-MansaMart-App, X-Device-Name, X-Device-Platform");
       res.header("Access-Control-Allow-Credentials", "true");
     }
     if (origin && !isAllowedOrigin(origin)) return res.status(403).json({ message: "Origin not allowed" });

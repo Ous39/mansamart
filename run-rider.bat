@@ -97,8 +97,13 @@ call :prepare_project
 if errorlevel 1 goto :failed
 set "EXPO_PUBLIC_APP_AUDIENCE=rider"
 set "EXPO_PUBLIC_API_URL=http://%LAN_IP%:5000"
+for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /C:"GOOGLE_RIDER_WEB_CLIENT_ID=" /C:"GOOGLE_RIDER_ANDROID_CLIENT_ID=" /C:"GOOGLE_RIDER_IOS_CLIENT_ID=" "%ENV_FILE%"`) do set "%%A=%%B"
+set "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=%GOOGLE_RIDER_WEB_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=%GOOGLE_RIDER_ANDROID_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=%GOOGLE_RIDER_IOS_CLIENT_ID%"
 echo.
 echo Install Expo Go, keep both devices on the same Wi-Fi, and scan the QR code.
+echo Google, Apple, and remote push require an EAS development build.
 echo Foreground location works only while the Rider app is open.
 echo Press Ctrl+C to stop Expo.
 call %PNPM_CMD% --filter @mansamart/rider-mobile exec expo start --host lan --port 8083 --clear
@@ -109,6 +114,10 @@ call :prepare_project
 if errorlevel 1 goto :failed
 set "EXPO_PUBLIC_APP_AUDIENCE=rider"
 set "EXPO_PUBLIC_API_URL=http://127.0.0.1:5000"
+for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /C:"GOOGLE_RIDER_WEB_CLIENT_ID=" /C:"GOOGLE_RIDER_ANDROID_CLIENT_ID=" /C:"GOOGLE_RIDER_IOS_CLIENT_ID=" "%ENV_FILE%"`) do set "%%A=%%B"
+set "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=%GOOGLE_RIDER_WEB_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=%GOOGLE_RIDER_ANDROID_CLIENT_ID%"
+set "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=%GOOGLE_RIDER_IOS_CLIENT_ID%"
 echo Opening http://localhost:8083 ...
 start "" "http://localhost:8083"
 call %PNPM_CMD% --filter @mansamart/rider-mobile exec expo start --web --port 8083 --clear

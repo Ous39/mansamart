@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from "react";
 import { loadToken, saveToken, clearToken, getToken } from "@/lib/auth-token";
 import { apiRequest, getApiUrl, queryClient } from "@/lib/query-client";
+import { registerPushDevice, resetPushRegistration } from "@/lib/push-registration";
 
 export type UserRole = "user" | "vendor" | "service_provider" | "delivery_rider" | "admin"; // user = shopper/customer account
 
@@ -55,6 +56,8 @@ interface AuthContextValue {
   pinVerified: boolean;
   login: (email: string, password: string) => Promise<{ hasPin: boolean; user: User }>;
   register: (data: RegisterData) => Promise<void>;
+  socialLogin: (provider: "google" | "apple", idToken: string, nonce?: string, role?: UserRole, name?: string) => Promise<{ hasPin: boolean; user: User }>;
+  verifyPhoneCode: (challengeId: string, code: string) => Promise<{ hasPin: boolean; user: User }>;
   logout: () => Promise<void>;
   updateProfile: (updates: Partial<User>) => Promise<void>;
   setupPin: (pin: string) => Promise<void>;
@@ -91,6 +94,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     initAuth();
   }, []);
+
+  useEffect(() => {
+    if (user) void registerPushDevice(user.id).catch(() => {});
+  }, [user?.id]);
 
   const initAuth = async () => {
     try {
@@ -135,9 +142,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.clear();
   };
 
+  const acceptAuthentication = async (data: any) => {
+    if (!data?.user || !roleAllowed(data.user.role)) throw new Error("Use the MansaMart application for your account type");
+    await saveToken(data.token);
+    setUser(data.user);
+    setHasPin(!!data.hasPin);
+    setPinVerified(!data.hasPin);
+    queryClient.clear();
+    return { hasPin: !!data.hasPin, user: data.user as User };
+  };
+
+  const socialLogin = async (provider: "google" | "apple", idToken: string, nonce?: string, role?: UserRole, name?: string) => {
+    const res = await apiRequest("POST", "/api/auth/social", { provider, idToken, nonce, role, name });
+    return acceptAuthentication(await res.json());
+  };
+
+  const verifyPhoneCode = async (challengeId: string, code: string) => {
+    const res = await apiRequest("POST", "/api/auth/phone/verify", { challengeId, code });
+    return acceptAuthentication(await res.json());
+  };
+
   const logout = async () => {
     try { await apiRequest("POST", "/api/auth/logout"); } catch {}
     await clearToken();
+    resetPushRegistration();
     setUser(null);
     setHasPin(false);
     setPinVerified(false);
@@ -165,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     user, isLoading, isAuthenticated: !!user,
     hasPin, pinVerified,
-    login, register, logout, updateProfile,
+    login, register, socialLogin, verifyPhoneCode, logout, updateProfile,
     setupPin, verifyPin, setPinVerified,
   }), [user, isLoading, hasPin, pinVerified]);
 

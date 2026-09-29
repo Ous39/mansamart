@@ -16,6 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "gm.mansamart.customer",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "MansaMart uses your location to show nearby products, services, vendors, riders, and delivery tracking.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "MansaMart can use background location during active deliveries so shoppers, vendors, and riders can track orders safely.",
@@ -48,6 +49,8 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
+      "expo-apple-authentication",
+      "expo-notifications",
       [
         "expo-location",
         {

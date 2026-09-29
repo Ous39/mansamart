@@ -6,7 +6,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, router } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -16,10 +16,12 @@ import { queryClient } from "@/lib/query-client";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { BookingProvider } from "@/contexts/BookingContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
+import { subscribeToNotificationNavigation } from "@/lib/push-registration";
 
 SplashScreen.preventAutoHideAsync();
 
 function RootLayoutNav() {
+  useEffect(() => subscribeToNotificationNavigation(route => router.push(route as any)), []);
   return (
     <Stack screenOptions={{ headerBackTitle: "Back" }}>
       <Stack.Screen name="index" options={{ headerShown: false }} />

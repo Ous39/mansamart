@@ -158,6 +158,30 @@ For an existing PostgreSQL deployment, apply `packages/database/migrations/custo
 
 The website includes public product and service discovery, search and filtering, detail pages, customer cart and server-priced Wave checkout, order and delivery tracking, bookings, notifications, support, vendor and service-provider dashboards, catalogue controls, finance and payout requests, returns, and rider delivery operations. Each authenticated account is routed to its own role area. Administrator sessions are rejected by the general authentication endpoint and the website sends administrators to the separate secured portal.
 
+## Production authentication and notifications
+
+Customer, Business, and Rider now support password login, passwordless phone OTP, Google identity tokens, Apple Sign in, secure native token storage, active-device review, session revocation, Expo push registration, notification deep links, and per-category push preferences. The general website supports password and phone OTP login plus the same session and preference controls. Administrator authentication remains isolated and never accepts phone or social login.
+
+The API enforces these controls:
+
+- OTP codes are HMAC-hashed, expire in ten minutes, allow five attempts, have a resend cooldown, and are consumed atomically.
+- Development codes are returned only when `NODE_ENV` is not production and `PHONE_OTP_DEV_EXPOSE_CODE=true`.
+- Google and Apple authentication accepts only signed ID tokens. The API verifies the provider issuer, exact client-ID audience, expiry, signing key, signature, optional nonce, and one-time token use.
+- Sessions contain an application audience, device metadata, last-seen time, expiry, and revocation time. A session cannot cross from one MansaMart app to another.
+- Expo push tokens belong to the authenticated user and app audience. Promotions are off by default; every in-app notification remains available even when its push category is disabled.
+
+Apply the migration to an existing database:
+
+```bash
+psql "$DATABASE_URL" -f packages/database/migrations/0010_auth_notifications_production.sql
+```
+
+For a local OTP demonstration on Windows, copy `.env.docker.example` to `.env.docker`, set a long `PHONE_OTP_PEPPER`, then set `PHONE_OTP_ENABLED=true` and `PHONE_OTP_DEV_EXPOSE_CODE=true`. Start the desired application with `run-mansamart.bat` or its individual `.bat` launcher. The code is displayed only in the local UI. Production must set `PHONE_OTP_DEV_EXPOSE_CODE=false` and configure `SMS_PROVIDER_URL`, `SMS_PROVIDER_TOKEN`, and `SMS_SENDER_ID`.
+
+Google sign-in requires OAuth client IDs restricted to each package/bundle identifier. Put every accepted client ID in the server-only `GOOGLE_CLIENT_IDS` allowlist and the matching public client ID in the mobile app environment. Apple client IDs belong in `APPLE_CLIENT_IDS`. Never put provider secrets in `EXPO_PUBLIC_*` variables.
+
+Native Google/Apple sign-in and remote push notifications require a development or store build rather than relying on Expo Go. Run `eas init` for each mobile workspace so `extra.eas.projectId` is present, configure the iOS/Android push credentials in EAS, and test on a physical device. The `.bat` launchers still provide web and basic Expo previews; use an EAS development build for the complete authentication and push flow.
+
 ## Delivery maps and live tracking
 
 The delivery flow now carries one verified map context from checkout through dispatch and delivery:
