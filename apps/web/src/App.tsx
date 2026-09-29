@@ -102,6 +102,8 @@ export default function App() {
 
   let page: ReactNode = null;
   if (routePath === "/") page = <HomePage {...marketplaceProps}/>;
+  else if (routePath === "/forgot-password") page = <ForgotPasswordPage navigate={navigate}/>;
+  else if (routePath === "/reset-password") page = <ResetPasswordPage navigate={navigate}/>;
   else if (routePath === "/shop") page = <ShopPage {...marketplaceProps}/>;
   else if (routePath === "/services") page = <ServicesPage {...marketplaceProps}/>;
   else if (routePath.startsWith("/product/")) page = <ProductDetailPage {...marketplaceProps} productId={routePath.split("/")[2]}/>;
@@ -174,7 +176,42 @@ function AuthModal({ mode, setMode, close, finish }: { mode: AuthMode; setMode: 
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Authentication failed"); }
     finally { setBusy(false); }
   };
-  return <div className="modal-backdrop" onMouseDown={close}><form className="modal-card auth-card" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}><button type="button" className="modal-close" onClick={close}><Icon name="close"/></button><span className="brand-mark large">M</span><h2>{mode === "login" ? "Welcome back" : "Join MansaMart"}</h2><p>{mode === "login" ? "Sign in as a customer, vendor, provider or rider." : "Choose the account that matches how you will use the marketplace."}</p><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>Sign in</button><button type="button" className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Register</button></div>{error && <div className="notice error-notice" role="alert">{error}</div>}{mode === "register" && <><div className="role-picker"><button type="button" className={role === "user" ? "active" : ""} onClick={() => setRole("user")}><Icon name="user"/>Customer</button><button type="button" className={role === "vendor" ? "active" : ""} onClick={() => setRole("vendor")}><Icon name="store"/>Vendor</button><button type="button" className={role === "service_provider" ? "active" : ""} onClick={() => setRole("service_provider")}><Icon name="briefcase"/>Provider</button><button type="button" className={role === "delivery_rider" ? "active" : ""} onClick={() => setRole("delivery_rider")}><Icon name="bike"/>Rider</button></div><label>Full name<input name="name" autoComplete="name" minLength={2} required/></label>{role !== "user" && role !== "delivery_rider" && <label>Business name<input name="businessName" minLength={2} required/></label>}{role !== "user" && role !== "delivery_rider" && <label>Business type<input name="businessType" placeholder={role === "vendor" ? "Fashion, electronics, grocery…" : "Cleaning, repairs, beauty…"} required/></label>}<div className="form-grid"><label>Phone<input name="phone" type="tel" autoComplete="tel"/></label><label>City / area<input name="city" autoComplete="address-level2"/></label></div></>}<label>Email<input name="email" type="email" autoComplete="email" required/></label><label>Password<input name="password" type="password" minLength={6} autoComplete={mode === "login" ? "current-password" : "new-password"} required/></label><Button type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : "Create account"}</Button><small>Administrator accounts are rejected here. Admins must use admin.mansamart.gm.</small></form></div>;
+  return <div className="modal-backdrop" onMouseDown={close}><form className="modal-card auth-card" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}><button type="button" className="modal-close" onClick={close}><Icon name="close"/></button><span className="brand-mark large">M</span><h2>{mode === "login" ? "Welcome back" : "Join MansaMart"}</h2><p>{mode === "login" ? "Sign in as a customer, vendor, provider or rider." : "Choose the account that matches how you will use the marketplace."}</p><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>Sign in</button><button type="button" className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Register</button></div>{error && <div className="notice error-notice" role="alert">{error}</div>}{mode === "register" && <><div className="role-picker"><button type="button" className={role === "user" ? "active" : ""} onClick={() => setRole("user")}><Icon name="user"/>Customer</button><button type="button" className={role === "vendor" ? "active" : ""} onClick={() => setRole("vendor")}><Icon name="store"/>Vendor</button><button type="button" className={role === "service_provider" ? "active" : ""} onClick={() => setRole("service_provider")}><Icon name="briefcase"/>Provider</button><button type="button" className={role === "delivery_rider" ? "active" : ""} onClick={() => setRole("delivery_rider")}><Icon name="bike"/>Rider</button></div><label>Full name<input name="name" autoComplete="name" minLength={2} required/></label>{role !== "user" && role !== "delivery_rider" && <label>Business name<input name="businessName" minLength={2} required/></label>}{role !== "user" && role !== "delivery_rider" && <label>Business type<input name="businessType" placeholder={role === "vendor" ? "Fashion, electronics, grocery…" : "Cleaning, repairs, beauty…"} required/></label>}<div className="form-grid"><label>Phone<input name="phone" type="tel" autoComplete="tel"/></label><label>City / area<input name="city" autoComplete="address-level2"/></label></div></>}<label>Email<input name="email" type="email" autoComplete="email" required/></label><label>Password<input name="password" type="password" minLength={mode === "register" ? 8 : 1} maxLength={128} autoComplete={mode === "login" ? "current-password" : "new-password"} required/></label>{mode === "login" && <button type="button" className="text-link" onClick={() => { close(); window.location.assign("/forgot-password"); }}>Forgot password?</button>}<Button type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : "Create account"}</Button><small>Administrator accounts are rejected here. Admins must use admin.mansamart.gm.</small></form></div>;
+}
+
+function ForgotPasswordPage({ navigate }: { navigate: Navigate }) {
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setMessage("");
+    try {
+      const result = await api.request<{ message: string }>("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
+      setMessage(result.message);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to request a reset link"); }
+    finally { setBusy(false); }
+  };
+  return <main className="gate-page"><form className="data-card auth-card" onSubmit={submit}><span className="brand-mark large">M</span><h1>Reset your password</h1><p>Enter your account email. We will send a single-use link that expires after 30 minutes.</p>{message && <div className="notice" role="status">{message}</div>}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required/></label><Button type="submit" disabled={busy}>{busy ? "Sending…" : "Send reset link"}</Button><Button type="button" className="secondary" onClick={() => navigate("/")}>Return home</Button></form></main>;
+}
+
+function ResetPasswordPage({ navigate }: { navigate: Navigate }) {
+  const token = new URLSearchParams(window.location.search).get("token") || "";
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setMessage("");
+    const form = new FormData(event.currentTarget);
+    const password = String(form.get("password") || "");
+    const confirmation = String(form.get("confirmation") || "");
+    if (password !== confirmation) { setMessage("Passwords do not match"); setBusy(false); return; }
+    try {
+      await api.request("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password }) });
+      setMessage("Password updated. You can now sign in with your new password.");
+      window.setTimeout(() => navigate("/"), 1500);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reset password"); }
+    finally { setBusy(false); }
+  };
+  return <main className="gate-page"><form className="data-card auth-card" onSubmit={submit}><span className="brand-mark large">M</span><h1>Choose a new password</h1><p>Use at least eight characters. Completing this reset signs out every existing session.</p>{message && <div className="notice" role="status">{message}</div>}{token ? <><label>New password<input name="password" type="password" minLength={8} maxLength={128} autoComplete="new-password" required/></label><label>Confirm password<input name="confirmation" type="password" minLength={8} maxLength={128} autoComplete="new-password" required/></label><Button type="submit" disabled={busy}>{busy ? "Updating…" : "Update password"}</Button></> : <div className="notice error-notice">This reset link is missing its secure token.</div>}<Button type="button" className="secondary" onClick={() => navigate("/")}>Return home</Button></form></main>;
 }
 
 function SignInRequired({ openAuth, navigate }: { openAuth: (mode?: AuthMode, returnTo?: string) => void; navigate: Navigate }) {

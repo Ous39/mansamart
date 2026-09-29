@@ -8,18 +8,16 @@ import {
   FlatList,
   Platform,
   Dimensions,
-  Image,
 } from "react-native";
 import { router } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
-import { products as localProducts, categories, getSaleProducts } from "@/data/products";
+import { products as localProducts, getSaleProducts } from "@/data/products";
 import { ProductCard } from "@/components/ProductCard";
-import { FixedHeader, getHeaderHeight } from "@/components/FixedHeader";
+import { FixedHeader } from "@/components/FixedHeader";
 import { useAuth } from "@/contexts/AuthContext";
 
 const { width } = Dimensions.get("window");
@@ -113,10 +111,8 @@ function BannerCarousel() {
 }
 
 export default function HomeScreen() {
-  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const countdown = useSecs(2 * 3600 + 47 * 60 + 22);
-  const headerHeight = getHeaderHeight(insets);
 
   const { data: apiProducts } = useQuery<any[]>({ queryKey: ["/api/products"] });
   const { data: flashDealsData = [] } = useQuery<any[]>({ queryKey: ["/api/flash-deals"] });

@@ -9,12 +9,14 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   ScrollView,
+  Alert,
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
+import { getApiUrl } from "@/lib/query-client";
 
 export default function ForgotPasswordScreen() {
   const insets = useSafeAreaInsets();
@@ -25,10 +27,20 @@ export default function ForgotPasswordScreen() {
   const handleReset = async () => {
     if (!email.trim()) return;
     setIsLoading(true);
-    await new Promise(r => setTimeout(r, 1500));
-    setIsLoading(false);
-    setSent(true);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    try {
+      const response = await fetch(new URL("/api/auth/forgot-password", getApiUrl()).toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-MansaMart-App": process.env.EXPO_PUBLIC_APP_AUDIENCE || "business" },
+        body: JSON.stringify({ email: email.trim().toLowerCase() }),
+      });
+      if (!response.ok) throw new Error("Unable to request a reset link");
+      setSent(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      Alert.alert("Reset unavailable", error instanceof Error ? error.message : "Try again later.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

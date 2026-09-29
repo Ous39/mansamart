@@ -86,7 +86,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (isAuthenticated && user) {
       loadServerNotifications();
       const token = getToken();
-      socket = io(getApiUrl(), { transports: ["websocket", "polling"], auth: { token } });
+      socket = io(getApiUrl(), { transports: ["websocket", "polling"], auth: { token, audience: process.env.EXPO_PUBLIC_APP_AUDIENCE || "business" } });
       socket.on("notification:new", (payload: any) => {
         const incoming = normalizeNotification(payload?.notification || payload);
         setNotifications(prev => {

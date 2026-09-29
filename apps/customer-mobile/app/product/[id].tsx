@@ -103,7 +103,7 @@ export default function ProductDetailScreen() {
         category: product.category,
       }).catch(() => {});
     }
-  }, [product?.id]);
+  }, [product]);
 
   const similarProducts = (allProducts ?? localProducts)
     .filter((p: any) => p.id !== product?.id && p.category === product?.category)

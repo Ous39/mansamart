@@ -1,17 +1,15 @@
 import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { Tabs, router } from "expo-router";
-import { NativeTabs, Icon, Label, Badge } from "expo-router/unstable-native-tabs";
+import { NativeTabs, Icon, Label } from "expo-router/unstable-native-tabs";
 import { BlurView } from "expo-blur";
 import { Platform, StyleSheet, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect } from "react";
 import Colors from "@/constants/colors";
-import { useCart } from "@/contexts/CartContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { getDefaultRouteForRole, normalizeRole } from "@/lib/role-routes";
 
 function NativeTabLayout() {
-  const { totalItems } = useCart();
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
@@ -39,8 +37,6 @@ function NativeTabLayout() {
 }
 
 function ClassicTabLayout() {
-  const { totalItems } = useCart();
-  const { user } = useAuth();
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
 
@@ -117,7 +113,7 @@ export default function TabLayout() {
     if (!isLoading && user && role !== "user") {
       router.replace(getDefaultRouteForRole(role) as any);
     }
-  }, [isLoading, user?.id, role]);
+  }, [isLoading, user, role]);
 
   if (!isLoading && user && role !== "user") return null;
 

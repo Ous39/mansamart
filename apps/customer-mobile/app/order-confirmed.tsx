@@ -32,7 +32,7 @@ export default function OrderConfirmedScreen() {
     opacity.value = withDelay(200, withTiming(1, { duration: 400 }));
     contentOpacity.value = withDelay(700, withTiming(1, { duration: 500 }));
     contentY.value = withDelay(700, withSpring(0, { damping: 20 }));
-  }, []);
+  }, [scale, opacity, contentOpacity, contentY]);
 
   const iconStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,

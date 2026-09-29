@@ -1,10 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
-import * as TaskManager from "expo-task-manager";
 import { getApiUrl } from "@/lib/query-client";
 import { getToken, loadToken } from "@/lib/auth-token";
 
-const TASK_NAME = "mansamart-active-delivery-location";
 const ACTIVE_DELIVERY_KEY = "mansamart:active-delivery-id";
 const PENDING_LOCATION_KEY = "mansamart:pending-delivery-location";
 
@@ -74,41 +72,12 @@ export function payloadFromLocation(deliveryId: string, location: Location.Locat
   };
 }
 
-TaskManager.defineTask<{ locations: Location.LocationObject[] }>(TASK_NAME, async ({ data, error }) => {
-  if (error || !data?.locations?.length) return;
-  const deliveryId = await AsyncStorage.getItem(ACTIVE_DELIVERY_KEY);
-  if (!deliveryId) return;
-  const latest = data.locations[data.locations.length - 1];
-  await queueDeliveryLocation(payloadFromLocation(deliveryId, latest));
-});
-
 export async function startBackgroundDeliveryTracking(deliveryId: string): Promise<boolean> {
   await AsyncStorage.setItem(ACTIVE_DELIVERY_KEY, deliveryId);
-  const foreground = await Location.getForegroundPermissionsAsync();
-  if (foreground.status !== "granted") return false;
-  const background = await Location.requestBackgroundPermissionsAsync();
-  if (background.status !== "granted") return false;
-  const running = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
-  if (running) return true;
-  await Location.startLocationUpdatesAsync(TASK_NAME, {
-    accuracy: Location.Accuracy.Balanced,
-    timeInterval: 15_000,
-    distanceInterval: 25,
-    pausesUpdatesAutomatically: false,
-    activityType: Location.ActivityType.AutomotiveNavigation,
-    showsBackgroundLocationIndicator: true,
-    foregroundService: {
-      notificationTitle: "MansaMart delivery active",
-      notificationBody: "Sharing your route with the customer during this delivery.",
-      notificationColor: "#0EA47A",
-    },
-  });
-  return true;
+  return false;
 }
 
 export async function stopBackgroundDeliveryTracking() {
   await AsyncStorage.removeItem(ACTIVE_DELIVERY_KEY);
   await AsyncStorage.removeItem(PENDING_LOCATION_KEY);
-  const running = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
-  if (running) await Location.stopLocationUpdatesAsync(TASK_NAME);
 }

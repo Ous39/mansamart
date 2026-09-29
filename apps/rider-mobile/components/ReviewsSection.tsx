@@ -51,7 +51,7 @@ export function ReviewsSection({ targetId, targetType = "product" }: Props) {
       const token = getToken();
       const r = await fetch(new URL(`/api/reviews/${targetType}/${targetId}`, getApiUrl()).toString(), {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", "X-MansaMart-App": "rider", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ rating, text }),
       });
       if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Failed"); }
@@ -70,7 +70,7 @@ export function ReviewsSection({ targetId, targetType = "product" }: Props) {
       const token = getToken();
       const r = await fetch(new URL(`/api/reviews/${reviewId}/helpful`, getApiUrl()).toString(), {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { "X-MansaMart-App": "rider", Authorization: `Bearer ${token}` },
       });
       if (!r.ok) throw new Error("Failed");
       return r.json();

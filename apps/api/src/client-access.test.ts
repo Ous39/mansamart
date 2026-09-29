@@ -20,7 +20,9 @@ test("each mobile app accepts only its intended accounts", () => {
   assert.equal(roleAllowedForAudience(parseClientAudience("rider"), "admin"), false);
 });
 
-test("unknown application identities are rejected", () => {
-  assert.equal(parseClientAudience("admin"), null);
+test("administrator audience is isolated and unknown identities are rejected", () => {
+  const admin = parseClientAudience("admin");
+  assert.equal(roleAllowedForAudience(admin, "admin"), true);
+  assert.equal(roleAllowedForAudience(admin, "user"), false);
   assert.equal(parseClientAudience("something-else"), null);
 });

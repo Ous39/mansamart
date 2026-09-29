@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   Pressable,
-  Dimensions,
   Platform,
 } from "react-native";
 import { router } from "expo-router";
@@ -18,11 +17,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { getDefaultRouteForRole } from "@/lib/role-routes";
-
-const { width, height } = Dimensions.get("window");
 
 const FEATURES = [
   { icon: "shirt-outline", label: "Fashion", color: "#E91E8C" },
@@ -63,7 +59,7 @@ export default function OnboardingScreen() {
       btnOp.value = withDelay(1200, withTiming(1, { duration: 500 }));
       btnY.value = withDelay(1200, withSpring(0, { damping: 18 }));
     }
-  }, [isLoading, isAuthenticated, hasPin, pinVerified, user?.role]);
+  }, [isLoading, isAuthenticated, hasPin, pinVerified, user?.role, logoOp, logoY, tagOp, tagY, gridOp, btnOp, btnY]);
 
   const logoStyle = useAnimatedStyle(() => ({ opacity: logoOp.value, transform: [{ translateY: logoY.value }] }));
   const tagStyle = useAnimatedStyle(() => ({ opacity: tagOp.value, transform: [{ translateY: tagY.value }] }));

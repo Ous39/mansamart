@@ -3,7 +3,6 @@ import {
   View, Text, StyleSheet, Pressable, FlatList, Platform, Dimensions, Image,
 } from "react-native";
 import { router } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
@@ -94,7 +93,6 @@ function ServiceGridCard({ service }: { service: any }) {
 }
 
 export default function ServicesScreen() {
-  const insets = useSafeAreaInsets();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedSort, setSelectedSort] = useState("popular");
   const [selectedPriceType, setSelectedPriceType] = useState<string | null>(null);

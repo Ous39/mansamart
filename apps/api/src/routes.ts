@@ -1,6 +1,5 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
@@ -8,21 +7,24 @@ import { calculateDeliveryFee, calculateOrderTotal } from "@mansamart/business-l
 import { db } from "./db";
 import {
   users, sessions, products, services, orders, bookings,
-  reviews, cartItems, wishlistItems, notifications,
+  reviews, reviewHelpfulVotes, cartItems, wishlistItems, notifications,
   userActivity, flashDeals, addresses, shopperProfiles, vendorProfiles, providerProfiles, coupons, banners,
   wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
-  orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, pushNotifications, auditLogs, orderVendorFulfillments,
+  orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, pushNotifications, auditLogs, orderVendorFulfillments, passwordResetTokens, adminMfaChallenges,
 } from "@mansamart/database/schema";
-import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql } from "drizzle-orm";
+import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql, isNull } from "drizzle-orm";
 import {
   requireAuth, requireRole, optionalAuth,
   hashPassword, comparePassword, hashPin, comparePin,
-  createSession, deleteSession, getTokenFromRequest, getSessionUser,
+  createSession, deleteSession, getTokenFromRequest, getSession,
 } from "./auth";
 import { z } from "zod";
 import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
 import { registerPaymentRoutes } from "./payments/routes";
 import { registerWhatsappRoutes } from "./whatsapp/routes";
+import { saveBase64Image } from "./upload-security";
+import { sendAdminLoginCode, sendPasswordResetEmail } from "./email";
+import { hashAdminMfaChallenge, isAdminMfaCodeValid, isAdminMfaRequired } from "./admin-mfa";
 import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
 import {
   VENDOR_FULFILLMENT_STATUSES,
@@ -56,10 +58,30 @@ function roleAllowedForClient(req: Request, role: string): boolean {
 }
 
 const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function authRateLimit(req: Request, res: Response, next: NextFunction) {
+  const now = Date.now();
+  const key = `${req.path}:${req.ip || req.socket.remoteAddress || "unknown"}`;
+  const current = authAttempts.get(key);
+  if (!current || current.resetAt <= now) {
+    authAttempts.set(key, { count: 1, resetAt: now + 15 * 60_000 });
+    return next();
+  }
+  if (current.count >= 10) {
+    res.setHeader("Retry-After", Math.ceil((current.resetAt - now) / 1000));
+    return res.status(429).json({ message: "Too many authentication attempts. Try again later." });
+  }
+  current.count += 1;
+  if (authAttempts.size > 10_000) {
+    for (const [attemptKey, attempt] of authAttempts) if (attempt.resetAt <= now) authAttempts.delete(attemptKey);
+  }
+  next();
+}
 
 function adminLoginRateLimit(req: Request, res: Response, next: NextFunction) {
   const now = Date.now();
-  const key = req.ip || req.socket.remoteAddress || "unknown";
+  const key = `${req.path}:${req.ip || req.socket.remoteAddress || "unknown"}`;
   const current = adminLoginAttempts.get(key);
   if (!current || current.resetAt <= now) {
     adminLoginAttempts.set(key, { count: 1, resetAt: now + 15 * 60_000 });
@@ -98,7 +120,9 @@ function socketCorsOrigins() {
 
 function safeSocketUser(user: any) {
   if (!user) return null;
-  const { password, pin, ...safe } = user;
+  const safe = { ...user };
+  delete safe.password;
+  delete safe.pin;
   return safe;
 }
 
@@ -110,6 +134,40 @@ function safeUser(u: typeof users.$inferSelect) {
 function safeRiderProfile(profile: typeof deliveryRiders.$inferSelect) {
   const safe = { ...profile } as Record<string, unknown>;
   delete safe.internalNotes;
+  return safe;
+}
+
+function publicVendorProfile(profile: typeof vendorProfiles.$inferSelect) {
+  const safe = { ...profile } as Partial<typeof profile>;
+  delete safe.documents;
+  delete safe.businessRegistrationNo;
+  delete safe.taxNumber;
+  delete safe.payoutMethod;
+  delete safe.bankName;
+  delete safe.accountName;
+  delete safe.accountNumber;
+  delete safe.mobileMoneyProvider;
+  delete safe.mobileMoneyNumber;
+  delete safe.internalNotes;
+  delete safe.pendingProfileChanges;
+  delete safe.profileChangeNote;
+  return safe;
+}
+
+function publicProviderProfile(profile: typeof providerProfiles.$inferSelect) {
+  const safe = { ...profile } as Partial<typeof profile>;
+  delete safe.documents;
+  delete safe.payoutMethod;
+  delete safe.bankName;
+  delete safe.accountName;
+  delete safe.accountNumber;
+  delete safe.mobileMoneyProvider;
+  delete safe.mobileMoneyNumber;
+  return safe;
+}
+
+function safeOrder<T extends typeof orders.$inferSelect>(order: T) {
+  const { qrSecret, qrCode, ...safe } = order;
   return safe;
 }
 
@@ -192,21 +250,6 @@ function vendorHealthLabel(score: number, verificationStatus?: string) {
   if (score >= 85) return "Strong profile";
   if (score >= 60) return "Good but incomplete";
   return "Needs setup";
-}
-
-function base64ToFile(dataUri: string, fileName = "upload.jpg") {
-  const match = dataUri.match(/^data:(.+);base64,(.*)$/);
-  const mimeType = match?.[1] || "image/jpeg";
-  const base64 = match?.[2] || dataUri;
-  const extFromMime = mimeType.includes("png") ? "png" : mimeType.includes("webp") ? "webp" : "jpg";
-  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/\.+/g, ".");
-  const ext = safeName.includes(".") ? safeName.split(".").pop() : extFromMime;
-  const finalName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext || extFromMime}`;
-  const uploadDir = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(apiDirectory, "uploads");
-  fs.mkdirSync(uploadDir, { recursive: true });
-  const filePath = path.join(uploadDir, finalName);
-  fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
-  return { relativePath: `/uploads/${finalName}`, mimeType, filePath };
 }
 
 async function createDefaultProfiles(user: typeof users.$inferSelect) {
@@ -502,10 +545,13 @@ async function computeProfileCompletion(user: any) {
   const total = missing.length + 1;
   const score = Math.max(0, Math.round(((total - missing.length) / total) * 100));
   const restricted = ["vendor", "service_provider", "delivery_rider"].includes(user.role) && missing.length > 0;
-  const [check] = await db.insert(profileCompletionChecks).values({ userId: user.id, role: user.role, score, missingItems: missing, restricted }).returning().catch(async () => {
-    const [updated] = await db.update(profileCompletionChecks).set({ score, missingItems: missing, restricted, updatedAt: new Date() }).where(eq(profileCompletionChecks.userId, user.id)).returning();
-    return [updated];
-  }) as any;
+  const [check] = await db.insert(profileCompletionChecks)
+    .values({ userId: user.id, role: user.role, score, missingItems: missing, restricted })
+    .onConflictDoUpdate({
+      target: profileCompletionChecks.userId,
+      set: { role: user.role, score, missingItems: missing, restricted, updatedAt: new Date() },
+    })
+    .returning();
   return check || { score, missingItems: missing, restricted };
 }
 
@@ -578,14 +624,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // FILE UPLOADS - Expo/mobile friendly base64 image upload
   // ────────────────────────────────────────────────────────────────
-  app.post("/api/uploads/base64", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/uploads/base64", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     try {
-      const { image, fileName, kind } = z.object({
-        image: z.string().min(100),
-        fileName: z.string().optional(),
-        kind: z.string().optional(),
+      const { image } = z.object({
+        image: z.string().min(100).max(7_500_000),
       }).parse(req.body);
-      const saved = base64ToFile(image, fileName || `${kind || "upload"}.jpg`);
+      const uploadDir = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(apiDirectory, "uploads");
+      const saved = saveBase64Image(image, uploadDir);
       return res.status(201).json({
         url: publicUrl(req, saved.relativePath),
         path: saved.relativePath,
@@ -593,6 +638,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid image" });
+      if (err instanceof Error && /image|5 MB/i.test(err.message)) return res.status(400).json({ message: err.message });
       console.error(err);
       return res.status(500).json({ message: "Image upload failed" });
     }
@@ -602,11 +648,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AUTH
   // ────────────────────────────────────────────────────────────────
 
-  app.post("/api/auth/register", async (req: Request, res: Response) => {
+  app.post("/api/auth/register", authRateLimit, async (req: Request, res: Response) => {
     try {
       const schema = z.object({
         email: z.string().email(),
-        password: z.string().min(6),
+        password: z.string().min(8).max(128),
         name: z.string().min(1),
         phone: z.string().optional(),
         address: z.string().optional(),
@@ -641,7 +687,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await createDefaultProfiles(user);
 
-      const token = await createSession(user.id);
+      const token = await createSession(user.id, clientAudience(req)!);
 
       // Send welcome notification
       await db.insert(notifications).values({
@@ -672,7 +718,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid email or password" });
       }
       if (user.role !== "admin") return res.status(403).json({ message: "Administrator access required" });
-      const token = await createSession(user.id, 8 * 60 * 60 * 1000);
+      if (isAdminMfaRequired()) {
+        if (!process.env.ADMIN_MFA_PEPPER || process.env.ADMIN_MFA_PEPPER.length < 32 || !process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
+          return res.status(503).json({ message: "Administrator MFA is not configured" });
+        }
+        const challengeId = crypto.randomUUID();
+        const code = crypto.randomInt(100000, 1000000).toString();
+        await db.delete(adminMfaChallenges).where(eq(adminMfaChallenges.userId, user.id));
+        await db.insert(adminMfaChallenges).values({
+          id: challengeId,
+          userId: user.id,
+          codeHash: hashAdminMfaChallenge(challengeId, code, process.env.ADMIN_MFA_PEPPER!),
+          expiresAt: new Date(Date.now() + 10 * 60_000),
+          ipAddress: req.ip,
+        });
+        try {
+          await sendAdminLoginCode(user.email, code);
+        } catch {
+          await db.delete(adminMfaChallenges).where(eq(adminMfaChallenges.id, challengeId));
+          return res.status(503).json({ message: "Administrator verification email could not be delivered" });
+        }
+        await db.insert(auditLogs).values({ actorId: user.id, action: "admin_mfa_challenge_created", entityType: "admin_mfa_challenge", entityId: challengeId, metadata: { ip: req.ip } }).catch(() => {});
+        return res.json({ mfaRequired: true, challengeId, expiresIn: 10 * 60 });
+      }
+      const token = await createSession(user.id, "admin", 8 * 60 * 60 * 1000);
       await db.insert(auditLogs).values({ actorId: user.id, action: "admin_login", entityType: "session", metadata: { ip: req.ip } }).catch(() => {});
       return res.json({ token, user: safeUser(user), expiresIn: 8 * 60 * 60 });
     } catch (err: any) {
@@ -681,7 +750,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/login", async (req: Request, res: Response) => {
+  app.post("/api/admin/auth/mfa/verify", adminLoginRateLimit, async (req: Request, res: Response) => {
+    try {
+      if (String(req.header("x-mansamart-app") || "").toLowerCase() !== "admin" || !adminOriginAllowed(req)) {
+        return res.status(403).json({ message: "Administrator login is only available through the secure administrator portal." });
+      }
+      if (!isAdminMfaRequired()) return res.status(404).json({ message: "Administrator MFA is not enabled" });
+      const { challengeId, code } = z.object({
+        challengeId: z.string().uuid(),
+        code: z.string().regex(/^\d{6}$/),
+      }).parse(req.body);
+      const [row] = await db.select({ challenge: adminMfaChallenges, user: users })
+        .from(adminMfaChallenges)
+        .innerJoin(users, eq(adminMfaChallenges.userId, users.id))
+        .where(and(
+          eq(adminMfaChallenges.id, challengeId),
+          isNull(adminMfaChallenges.usedAt),
+          gt(adminMfaChallenges.expiresAt, new Date()),
+        ))
+        .limit(1);
+      if (!row || row.user.role !== "admin" || row.challenge.attempts >= 5) {
+        return res.status(401).json({ message: "Invalid or expired verification code" });
+      }
+      if (!isAdminMfaCodeValid(row.challenge.codeHash, challengeId, code, process.env.ADMIN_MFA_PEPPER || "")) {
+        await db.update(adminMfaChallenges).set({ attempts: sql`${adminMfaChallenges.attempts} + 1` }).where(eq(adminMfaChallenges.id, challengeId));
+        await db.insert(auditLogs).values({ actorId: row.user.id, action: "admin_mfa_failed", entityType: "admin_mfa_challenge", entityId: challengeId, metadata: { ip: req.ip } }).catch(() => {});
+        return res.status(401).json({ message: "Invalid or expired verification code" });
+      }
+      const [used] = await db.update(adminMfaChallenges).set({ usedAt: new Date() })
+        .where(and(eq(adminMfaChallenges.id, challengeId), isNull(adminMfaChallenges.usedAt)))
+        .returning();
+      if (!used) return res.status(409).json({ message: "Verification code was already used" });
+      const token = await createSession(row.user.id, "admin", 8 * 60 * 60 * 1000);
+      await db.insert(auditLogs).values({ actorId: row.user.id, action: "admin_login_mfa", entityType: "session", metadata: { ip: req.ip, challengeId } }).catch(() => {});
+      return res.json({ token, user: safeUser(row.user), expiresIn: 8 * 60 * 60 });
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: "Enter the six-digit verification code" });
+      if (err instanceof Error && err.message.includes("ADMIN_MFA_PEPPER")) return res.status(503).json({ message: "Administrator MFA is not configured" });
+      return res.status(500).json({ message: "Administrator verification failed" });
+    }
+  });
+
+  app.post("/api/auth/login", authRateLimit, async (req: Request, res: Response) => {
     try {
       const { email, password } = z.object({
         email: z.string().email(),
@@ -703,11 +813,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Use the MansaMart application for your account type." });
       }
 
-      const token = await createSession(user.id);
+      const token = await createSession(user.id, clientAudience(req)!);
       return res.json({ token, user: safeUser(user), hasPin: !!user.pin });
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: "Invalid data" });
       return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/auth/forgot-password", authRateLimit, async (req: Request, res: Response) => {
+    const generic = { message: "If that account exists, password reset instructions have been sent." };
+    try {
+      const { email } = z.object({ email: z.string().email() }).parse(req.body);
+      const [user] = await db.select().from(users).where(eq(users.email, email.trim().toLowerCase())).limit(1);
+      if (user && user.role !== "admin") {
+        const token = crypto.randomBytes(32).toString("hex");
+        const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+        await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, user.id));
+        await db.insert(passwordResetTokens).values({ userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 30 * 60_000) });
+        await sendPasswordResetEmail(user.email, token).catch((error) => {
+          console.warn("Password reset email could not be delivered:", error instanceof Error ? error.message : "email error");
+        });
+      }
+      return res.status(202).json(generic);
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: "Enter a valid email address" });
+      return res.status(202).json(generic);
+    }
+  });
+
+  app.post("/api/auth/reset-password", authRateLimit, async (req: Request, res: Response) => {
+    try {
+      const { token, password } = z.object({ token: z.string().min(32).max(256), password: z.string().min(8).max(128) }).parse(req.body);
+      const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+      const success = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM password_reset_tokens WHERE token_hash = ${tokenHash} FOR UPDATE`);
+        const [reset] = await tx.select().from(passwordResetTokens).where(eq(passwordResetTokens.tokenHash, tokenHash)).limit(1);
+        if (!reset || reset.usedAt || reset.expiresAt.getTime() <= Date.now()) return false;
+        const passwordHash = await hashPassword(password);
+        await tx.update(users).set({ password: passwordHash, updatedAt: new Date() }).where(eq(users.id, reset.userId));
+        await tx.update(passwordResetTokens).set({ usedAt: new Date() }).where(eq(passwordResetTokens.id, reset.id));
+        await tx.delete(sessions).where(eq(sessions.userId, reset.userId));
+        return true;
+      });
+      if (!success) return res.status(400).json({ message: "This reset link is invalid or expired" });
+      return res.json({ success: true });
+    } catch (err: any) {
+      if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message || "Invalid reset request" });
+      return res.status(500).json({ message: "Password reset failed" });
     }
   });
 
@@ -877,12 +1030,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const [p] = await db.select().from(products).where(eq(products.id, param(req, "id"))).limit(1);
     if (!p) return res.status(404).json({ message: "Product not found" });
     const viewer = (req as any).user;
-    const canSeeHidden = viewer?.role === "admin" || viewer?.id === p.vendorId;
+    const canSeeHidden = viewer?.role === "vendor" && viewer.id === p.vendorId;
     if (!canSeeHidden && (!p.inStock || Number(p.stock || 0) <= 0)) return res.status(404).json({ message: "Product not available" });
     return res.json(p);
   });
 
-  app.post("/api/products", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/products", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const schema = z.object({
@@ -921,29 +1074,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         placeholderIcon: z.string().optional(),
       });
       const data = schema.parse(req.body);
-      let vendorProfileForProduct: any = null;
-      if (user.role !== "admin") {
-        const [vp] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
-        vendorProfileForProduct = vp;
-        if (!isBusinessVerified(vp)) {
-          return res.status(403).json({ message: "Your vendor profile must be verified before you can publish products." });
-        }
-        const primaryCategory = vp?.shopCategory || user.businessType || "general";
-        const allowedCategories = new Set([primaryCategory, ...(Array.isArray(vp?.allowedCategories) ? vp.allowedCategories : [])]);
-        if (primaryCategory !== "general" && !allowedCategories.has(data.category)) {
-          return res.status(403).json({ message: `Your shop profile is set as ${primaryCategory}. Update your vendor profile before posting ${data.category} products.` });
-        }
+      const [vendorProfileForProduct] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
+      if (!isBusinessVerified(vendorProfileForProduct)) {
+        return res.status(403).json({ message: "Your vendor profile must be verified before you can publish products." });
+      }
+      const primaryCategory = vendorProfileForProduct?.shopCategory || user.businessType || "general";
+      const allowedCategories = new Set([primaryCategory, ...(Array.isArray(vendorProfileForProduct?.allowedCategories) ? vendorProfileForProduct.allowedCategories : [])]);
+      if (primaryCategory !== "general" && !allowedCategories.has(data.category)) {
+        return res.status(403).json({ message: `Your shop profile is set as ${primaryCategory}. Update your vendor profile before posting ${data.category} products.` });
       }
       const stockValue = Number(data.stock ?? 100);
       const cleanImages = Array.isArray(data.images) ? data.images.filter(Boolean).slice(0, 8) : [];
       const productData: any = { ...data };
-      if (user.role !== "admin") {
-        productData.brand = vendorProfileForProduct?.storeName || user.businessName || user.name || data.brand;
-        productData.location = vendorProfileForProduct?.location || data.location || user.area || user.city || user.region || "The Gambia";
-        productData.area = data.area || user.area || user.city || vendorProfileForProduct?.location || productData.location;
-        productData.latitude = data.latitude ?? user.latitude ?? null;
-        productData.longitude = data.longitude ?? user.longitude ?? null;
-      }
+      productData.brand = vendorProfileForProduct?.storeName || user.businessName || user.name || data.brand;
+      productData.location = vendorProfileForProduct?.location || data.location || user.area || user.city || user.region || "The Gambia";
+      productData.area = data.area || user.area || user.city || vendorProfileForProduct?.location || productData.location;
+      productData.latitude = data.latitude ?? user.latitude ?? null;
+      productData.longitude = data.longitude ?? user.longitude ?? null;
       const [p] = await db.insert(products).values({ ...productData, images: cleanImages, stock: stockValue, inStock: stockValue > 0, vendorId: user.id, rating: 4.5, reviewCount: 0 }).returning();
       return res.status(201).json(p);
     } catch (err: any) {
@@ -952,17 +1099,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/products/:id", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.put("/api/products/:id", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const [p] = await db.select().from(products).where(eq(products.id, param(req, "id"))).limit(1);
       if (!p) return res.status(404).json({ message: "Not found" });
-      if (user.role !== "admin" && p.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
-      if (user.role !== "admin") {
-        const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
-        if (!isBusinessVerified(profile)) {
-          return res.status(403).json({ message: "Your vendor profile must be verified before you can update products." });
-        }
+      if (p.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
+      const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
+      if (!isBusinessVerified(profile)) {
+        return res.status(403).json({ message: "Your vendor profile must be verified before you can update products." });
       }
 
       const schema = z.object({
@@ -1001,7 +1146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         placeholderIcon: z.string().optional().nullable(),
       });
       const data = schema.parse(req.body);
-      if (user.role !== "admin" && data.category) {
+      if (data.category) {
         const [vp] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
         const primaryCategory = vp?.shopCategory || user.businessType || "general";
         const allowedCategories = new Set([primaryCategory, ...(Array.isArray(vp?.allowedCategories) ? vp.allowedCategories : [])]);
@@ -1010,14 +1155,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       const updateData: any = { ...data };
-      if (user.role !== "admin") {
-        const [vp] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
-        updateData.brand = vp?.storeName || user.businessName || user.name || p.brand;
-        updateData.location = vp?.location || data.location || user.area || user.city || user.region || p.location || "The Gambia";
-        updateData.area = data.area || user.area || user.city || vp?.location || p.area || updateData.location;
-        updateData.latitude = data.latitude ?? user.latitude ?? p.latitude ?? null;
-        updateData.longitude = data.longitude ?? user.longitude ?? p.longitude ?? null;
-      }
+      const [vp] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
+      updateData.brand = vp?.storeName || user.businessName || user.name || p.brand;
+      updateData.location = vp?.location || data.location || user.area || user.city || user.region || p.location || "The Gambia";
+      updateData.area = data.area || user.area || user.city || vp?.location || p.area || updateData.location;
+      updateData.latitude = data.latitude ?? user.latitude ?? p.latitude ?? null;
+      updateData.longitude = data.longitude ?? user.longitude ?? p.longitude ?? null;
       if (Array.isArray(updateData.images)) updateData.images = updateData.images.filter(Boolean).slice(0, 8);
       if (typeof updateData.stock === "number") updateData.inStock = updateData.stock > 0;
       const [updated] = await db.update(products).set(updateData).where(eq(products.id, param(req, "id"))).returning();
@@ -1028,12 +1171,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/products/:id", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.delete("/api/products/:id", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const [p] = await db.select().from(products).where(eq(products.id, param(req, "id"))).limit(1);
       if (!p) return res.status(404).json({ message: "Not found" });
-      if (user.role !== "admin" && p.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
+      if (p.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
       await db.delete(products).where(eq(products.id, param(req, "id")));
       return res.json({ success: true });
     } catch {
@@ -1041,7 +1184,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/products/vendor/mine", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/products/vendor/mine", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const rows = await db.select().from(products).where(eq(products.vendorId, user.id)).orderBy(desc(products.createdAt));
     return res.json(rows);
@@ -1070,7 +1213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(s);
   });
 
-  app.post("/api/services", requireAuth, requireRole("service_provider", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/services", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const schema = z.object({
@@ -1089,11 +1232,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isFeatured: z.boolean().optional(),
       });
       const data = schema.parse(req.body);
-      if (user.role !== "admin") {
-        const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
-        if (!isBusinessVerified(profile)) {
-          return res.status(403).json({ message: "Your provider profile must be verified before you can publish services." });
-        }
+      const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
+      if (!isBusinessVerified(profile)) {
+        return res.status(403).json({ message: "Your provider profile must be verified before you can publish services." });
       }
       const [s] = await db.insert(services).values({
         ...data,
@@ -1112,17 +1253,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/services/:id", requireAuth, requireRole("service_provider", "admin"), async (req: Request, res: Response) => {
+  app.put("/api/services/:id", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const [s] = await db.select().from(services).where(eq(services.id, param(req, "id"))).limit(1);
       if (!s) return res.status(404).json({ message: "Not found" });
-      if (user.role !== "admin" && s.providerId !== user.id) return res.status(403).json({ message: "Forbidden" });
-      if (user.role !== "admin") {
-        const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
-        if (!isBusinessVerified(profile)) {
-          return res.status(403).json({ message: "Your provider profile must be verified before you can update services." });
-        }
+      if (s.providerId !== user.id) return res.status(403).json({ message: "Forbidden" });
+      const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
+      if (!isBusinessVerified(profile)) {
+        return res.status(403).json({ message: "Your provider profile must be verified before you can update services." });
       }
       const schema = z.object({
         name: z.string().min(1).optional(),
@@ -1142,12 +1281,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       const data = schema.parse(req.body);
       const updateData: any = { ...data };
-      if (user.role !== "admin") {
-        updateData.area = data.area || user.area || user.city || user.region || s.area || "The Gambia";
-        updateData.latitude = data.latitude ?? user.latitude ?? s.latitude ?? null;
-        updateData.longitude = data.longitude ?? user.longitude ?? s.longitude ?? null;
-        updateData.providerName = user.businessName ?? user.name;
-      }
+      updateData.area = data.area || user.area || user.city || user.region || s.area || "The Gambia";
+      updateData.latitude = data.latitude ?? user.latitude ?? s.latitude ?? null;
+      updateData.longitude = data.longitude ?? user.longitude ?? s.longitude ?? null;
+      updateData.providerName = user.businessName ?? user.name;
       const [updated] = await db.update(services).set(updateData).where(eq(services.id, param(req, "id"))).returning();
       return res.json(updated);
     } catch (err: any) {
@@ -1156,17 +1293,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/services/provider/mine", requireAuth, requireRole("service_provider", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/services/provider/mine", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const rows = await db.select().from(services).where(eq(services.providerId, user.id)).orderBy(desc(services.createdAt));
     return res.json(rows);
   });
 
-  app.delete("/api/services/:id", requireAuth, requireRole("service_provider", "admin"), async (req: Request, res: Response) => {
+  app.delete("/api/services/:id", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const [service] = await db.select().from(services).where(eq(services.id, param(req, "id"))).limit(1);
     if (!service) return res.status(404).json({ message: "Service not found" });
-    if (user.role !== "admin" && service.providerId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    if (service.providerId !== user.id) return res.status(403).json({ message: "Forbidden" });
     const [activeBooking] = await db.select().from(bookings).where(and(
       eq(bookings.serviceId, service.id),
       inArray(bookings.status, ["pending", "confirmed", "in_progress"]),
@@ -1180,12 +1317,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ORDERS
   // ────────────────────────────────────────────────────────────────
 
-  app.get("/api/orders", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/orders", requireAuth, requireRole("user", "vendor"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    if (user.role === "admin") {
-      const rows = await db.select().from(orders).orderBy(desc(orders.createdAt));
-      return res.json(rows);
-    }
     if (user.role === "vendor") {
       const rows = await getOrdersForVendor(user.id);
       return res.json(rows);
@@ -1193,20 +1326,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const rows = await db.select().from(orders)
       .where(eq(orders.userId, user.id))
       .orderBy(desc(orders.createdAt));
-    return res.json(rows);
+    return res.json(rows.map(safeOrder));
   });
 
-  app.get("/api/orders/:id", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/orders/:id", requireAuth, requireRole("user", "vendor"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const [o] = await db.select().from(orders).where(eq(orders.id, param(req, "id"))).limit(1);
     if (!o) return res.status(404).json({ message: "Not found" });
     if (user.role === "vendor") {
       const vendorOrder = (await getOrdersForVendor(user.id)).find((order) => order.id === o.id);
       if (!vendorOrder) return res.status(403).json({ message: "Forbidden" });
-      return res.json(vendorOrder);
+      return res.json(safeOrder(vendorOrder));
     }
-    if (user.role !== "admin" && o.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
-    return res.json(o);
+    if (o.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    return res.json(safeOrder(o));
   });
 
   app.post("/api/orders", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
@@ -1299,24 +1432,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/orders/:id/status", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.put("/api/orders/:id/status", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const orderId = param(req, "id");
       const [currentOrder] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
       if (!currentOrder) return res.status(404).json({ message: "Order not found" });
-
-      if (user.role === "admin") {
-        const { status } = z.object({ status: z.enum([
-          "pending", "paid", "confirmed", "processing", "preparing", "ready_for_pickup",
-          "searching_rider", "rider_searching", "rider_assigned", "rider_arrived_vendor",
-          "picked_up", "on_the_way", "shipped", "delivered", "completed", "cancelled", "refunded",
-        ]) }).parse(req.body);
-        const [updated] = await db.update(orders).set({ status, updatedAt: new Date() }).where(eq(orders.id, orderId)).returning();
-        await addTracking(orderId, status, "Order status updated", `Administrator changed the order status to ${status}.`, user);
-        await notifyOrderParties(updated, "Order Updated", `Order status changed to ${status.replace(/_/g, " ")}.`, "order");
-        return res.json(updated);
-      }
 
       const { status } = z.object({ status: z.enum(VENDOR_FULFILLMENT_STATUSES) }).parse(req.body);
       await ensureVendorFulfillments(currentOrder);
@@ -1349,14 +1470,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // BOOKINGS
   // ────────────────────────────────────────────────────────────────
 
-  app.get("/api/bookings", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/bookings", requireAuth, requireRole("user", "service_provider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     let rows: Array<{ booking: typeof bookings.$inferSelect; providerName: string | null }>;
-    if (user.role === "admin") {
-      rows = await db.select({ booking: bookings, providerName: services.providerName })
-        .from(bookings).leftJoin(services, eq(bookings.serviceId, services.id))
-        .orderBy(desc(bookings.createdAt));
-    } else if (user.role === "service_provider") {
+    if (user.role === "service_provider") {
       rows = await db.select({ booking: bookings, providerName: services.providerName })
         .from(bookings).leftJoin(services, eq(bookings.serviceId, services.id))
         .where(eq(bookings.providerId, user.id)).orderBy(desc(bookings.createdAt));
@@ -1440,7 +1557,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/bookings/:id/status", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/bookings/:id/status", requireAuth, requireRole("user", "service_provider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { status } = z.object({ status: z.enum(BOOKING_STATUSES) }).parse(req.body);
@@ -1475,7 +1592,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // CART
   // ────────────────────────────────────────────────────────────────
 
-  app.get("/api/cart", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/cart", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const items = await db
       .select({ cartItem: cartItems, product: products })
@@ -1485,7 +1602,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(items);
   });
 
-  app.post("/api/cart", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/cart", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { productId, quantity = 1, ...selectionInput } = z.object({
@@ -1528,7 +1645,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/cart/:id", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/cart/:id", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { quantity } = z.object({ quantity: z.number().int().min(1).max(99) }).parse(req.body);
@@ -1546,13 +1663,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/cart/:id", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/cart/:id", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     await db.delete(cartItems).where(and(eq(cartItems.id, param(req, "id")), eq(cartItems.userId, user.id)));
     return res.json({ success: true });
   });
 
-  app.delete("/api/cart", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/cart", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     await db.delete(cartItems).where(eq(cartItems.userId, user.id));
     return res.json({ success: true });
@@ -1562,7 +1679,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // WISHLIST
   // ────────────────────────────────────────────────────────────────
 
-  app.get("/api/wishlist", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/wishlist", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const items = await db
       .select({ wishlistItem: wishlistItems, product: products })
@@ -1572,7 +1689,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(items);
   });
 
-  app.post("/api/wishlist", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/wishlist", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { productId } = z.object({ productId: z.string() }).parse(req.body);
@@ -1586,7 +1703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/wishlist/:productId", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/wishlist/:productId", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     await db.delete(wishlistItems).where(
       and(eq(wishlistItems.userId, user.id), eq(wishlistItems.productId, param(req, "productId")))
@@ -1654,7 +1771,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows);
   });
 
-  app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/reviews", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const schema = z.object({
@@ -1677,7 +1794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // NOTIFICATIONS
   // ────────────────────────────────────────────────────────────────
 
-  app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/notifications", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const rows = await db.select().from(notifications)
       .where(eq(notifications.userId, user.id))
@@ -1686,14 +1803,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows);
   });
 
-  app.put("/api/notifications/:id/read", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/notifications/:id/read", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     await db.update(notifications).set({ isRead: true })
       .where(and(eq(notifications.id, param(req, "id")), eq(notifications.userId, user.id)));
     return res.json({ success: true });
   });
 
-  app.put("/api/notifications/read-all", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/notifications/read-all", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     await db.update(notifications).set({ isRead: true }).where(eq(notifications.userId, user.id));
     return res.json({ success: true });
@@ -1737,22 +1854,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/admin/users/:id/role", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
     try {
-      const { role } = z.object({ role: z.enum(["user", "vendor", "service_provider", "delivery_rider", "admin"]) }).parse(req.body);
-      const [u] = await db.update(users).set({ role }).where(eq(users.id, param(req, "id"))).returning();
+      const admin = (req as any).user;
+      const targetId = param(req, "id");
+      const { role, currentPassword, reason } = z.object({ role: z.enum(["user", "vendor", "service_provider", "delivery_rider", "admin"]), currentPassword: z.string().min(1), reason: z.string().trim().min(5).max(500) }).parse(req.body);
+      if (targetId === admin.id) return res.status(409).json({ message: "Administrators cannot change their own role" });
+      if (!(await comparePassword(currentPassword, admin.password))) return res.status(403).json({ message: "Administrator reauthentication failed" });
+      const [target] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
+      if (!target) return res.status(404).json({ message: "User not found" });
+      if (target.role === "admin" && role !== "admin") {
+        const admins = await db.select({ value: count() }).from(users).where(eq(users.role, "admin"));
+        if (Number(admins[0]?.value || 0) <= 1) return res.status(409).json({ message: "The last administrator cannot be demoted" });
+      }
+      const [u] = await db.update(users).set({ role, updatedAt: new Date() }).where(eq(users.id, targetId)).returning();
+      await db.delete(sessions).where(eq(sessions.userId, targetId));
+      await audit(admin.id, "admin.user_role_changed", "user", targetId, { previousRole: target.role, role, reason });
       return res.json(safeUser(u));
-    } catch {
-      return res.status(500).json({ message: "Server error" });
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid role change" });
+      return res.status(500).json({ message: "Role change failed" });
     }
   });
 
   app.delete("/api/admin/users/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
-    await db.delete(users).where(eq(users.id, param(req, "id")));
-    return res.json({ success: true });
+    try {
+      const admin = (req as any).user;
+      const targetId = param(req, "id");
+      const { currentPassword, reason } = z.object({ currentPassword: z.string().min(1), reason: z.string().trim().min(5).max(500) }).parse(req.body || {});
+      if (targetId === admin.id) return res.status(409).json({ message: "Administrators cannot delete their own account" });
+      if (!(await comparePassword(currentPassword, admin.password))) return res.status(403).json({ message: "Administrator reauthentication failed" });
+      const [target] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
+      if (!target) return res.status(404).json({ message: "User not found" });
+      if (target.role === "admin") {
+        const admins = await db.select({ value: count() }).from(users).where(eq(users.role, "admin"));
+        if (Number(admins[0]?.value || 0) <= 1) return res.status(409).json({ message: "The last administrator cannot be deleted" });
+      }
+      await audit(admin.id, "admin.user_deleted", "user", targetId, { role: target.role, email: target.email, reason });
+      await db.delete(users).where(eq(users.id, targetId));
+      return res.json({ success: true });
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid deletion request" });
+      return res.status(500).json({ message: "User deletion failed" });
+    }
   });
 
   app.get("/api/admin/orders", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
     const rows = await db.select().from(orders).orderBy(desc(orders.createdAt));
-    return res.json(rows);
+    return res.json(rows.map(safeOrder));
   });
 
   app.get("/api/admin/bookings", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
@@ -1843,13 +1990,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // ADDRESSES
   // ────────────────────────────────────────────────────────────────
-  app.get("/api/addresses", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/addresses", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const rows = await db.select().from(addresses).where(eq(addresses.userId, user.id)).orderBy(desc(addresses.isDefault));
     return res.json(rows);
   });
 
-  app.post("/api/addresses", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/addresses", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const schema = z.object({ label: z.string().default("Home"), fullName: z.string().min(1), phone: z.string().min(1), address: z.string().min(1), city: z.string().min(1), region: z.string().min(1), isDefault: z.boolean().default(false) });
     const data = schema.parse(req.body);
@@ -1858,7 +2005,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(addr);
   });
 
-  app.put("/api/addresses/:id", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/addresses/:id", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const schema = z.object({ label: z.string().optional(), fullName: z.string().optional(), phone: z.string().optional(), address: z.string().optional(), city: z.string().optional(), region: z.string().optional(), isDefault: z.boolean().optional() });
     const data = schema.parse(req.body);
@@ -1867,7 +2014,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(addr);
   });
 
-  app.delete("/api/addresses/:id", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/addresses/:id", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     await db.delete(addresses).where(and(eq(addresses.id, param(req, "id")), eq(addresses.userId, user.id)));
     return res.json({ success: true });
@@ -1876,7 +2023,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // VENDOR PROFILES
   // ────────────────────────────────────────────────────────────────
-  app.get("/api/vendors/me/profile", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/vendors/me/profile", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const [vp] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
     return res.json(vp || null);
@@ -1924,7 +2071,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const [vendorUser] = await db.select().from(users).where(eq(users.id, param(req, "id"))).limit(1);
     const vendorProducts = await db.select().from(products).where(and(eq(products.vendorId, param(req, "id")), eq(products.inStock, true), gt(products.stock, 0))).orderBy(desc(products.soldCount));
     const vendorReviews = await db.select().from(reviews).where(and(eq(reviews.targetId, param(req, "id")), eq(reviews.targetType, "vendor"))).orderBy(desc(reviews.createdAt)).limit(10);
-    return res.json({ ...vp, vendorName: vendorUser?.name, products: vendorProducts, reviews: vendorReviews, productCount: vendorProducts.length });
+    return res.json({ ...publicVendorProfile(vp), vendorName: vendorUser?.name, products: vendorProducts, reviews: vendorReviews, productCount: vendorProducts.length });
   });
 
   app.put("/api/vendors/profile", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
@@ -1993,7 +2140,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // PROVIDER PROFILES
   // ────────────────────────────────────────────────────────────────
-  app.get("/api/providers/me/profile", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/providers/me/profile", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const [pp] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
     return res.json(pp || null);
@@ -2004,7 +2151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!pp) return res.status(404).json({ message: "Provider not found" });
     const providerServices = await db.select().from(services).where(eq(services.providerId, param(req, "id")));
     const providerReviews = await db.select().from(reviews).where(and(eq(reviews.targetId, param(req, "id")), eq(reviews.targetType, "provider"))).orderBy(desc(reviews.createdAt)).limit(10);
-    return res.json({ ...pp, services: providerServices, reviews: providerReviews, serviceCount: providerServices.length });
+    return res.json({ ...publicProviderProfile(pp), services: providerServices, reviews: providerReviews, serviceCount: providerServices.length });
   });
 
   app.put("/api/providers/profile", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
@@ -2030,7 +2177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // COUPONS
   // ────────────────────────────────────────────────────────────────
-  app.post("/api/coupons/validate", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/coupons/validate", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const { code, orderTotal } = req.body;
     if (!code) return res.status(400).json({ message: "Coupon code required" });
     const [coupon] = await db.select().from(coupons).where(and(eq(coupons.code, code.toUpperCase()), eq(coupons.isActive, true))).limit(1);
@@ -2050,7 +2197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows);
   });
 
-  app.post("/api/reviews/:targetType/:targetId", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/reviews/:targetType/:targetId", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const targetType = z.enum(["product", "service"]).parse(param(req, "targetType"));
@@ -2065,11 +2212,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/reviews/:id/helpful", requireAuth, async (req: Request, res: Response) => {
-    const [rev] = await db.select().from(reviews).where(eq(reviews.id, param(req, "id"))).limit(1);
-    if (!rev) return res.status(404).json({ message: "Review not found" });
-    const [updated] = await db.update(reviews).set({ helpful: rev.helpful + 1 }).where(eq(reviews.id, param(req, "id"))).returning();
-    return res.json(updated);
+  app.post("/api/reviews/:id/helpful", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const reviewId = param(req, "id");
+    try {
+      const updated = await db.transaction(async (tx) => {
+        const [rev] = await tx.select().from(reviews).where(eq(reviews.id, reviewId)).limit(1);
+        if (!rev) return null;
+        const inserted = await tx.insert(reviewHelpfulVotes).values({ reviewId, userId: user.id }).onConflictDoNothing().returning();
+        if (inserted.length === 0) throw new Error("ALREADY_VOTED");
+        const [row] = await tx.update(reviews).set({ helpful: sql`${reviews.helpful} + 1` }).where(eq(reviews.id, reviewId)).returning();
+        return row;
+      });
+      if (!updated) return res.status(404).json({ message: "Review not found" });
+      return res.json(updated);
+    } catch (error: any) {
+      if (error.message === "ALREADY_VOTED" || error.code === "23505") return res.status(409).json({ message: "You already marked this review helpful" });
+      return res.status(500).json({ message: "Unable to record helpful vote" });
+    }
   });
 
   // ────────────────────────────────────────────────────────────────
@@ -2130,13 +2290,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/profile/change-password", requireAuth, async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const { currentPassword, newPassword } = z.object({ currentPassword: z.string(), newPassword: z.string().min(6) }).parse(req.body);
+    const { currentPassword, newPassword } = z.object({ currentPassword: z.string(), newPassword: z.string().min(8).max(128) }).parse(req.body);
     const [u] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
     if (!u) return res.status(404).json({ message: "User not found" });
     const valid = await comparePassword(currentPassword, u.password);
     if (!valid) return res.status(400).json({ message: "Current password is incorrect" });
     const hashed = await hashPassword(newPassword);
     await db.update(users).set({ password: hashed, updatedAt: new Date() }).where(eq(users.id, user.id));
+    await db.delete(sessions).where(eq(sessions.userId, user.id));
     return res.json({ success: true });
   });
 
@@ -2274,7 +2435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // VENDOR ADVANCED DASHBOARD
   // ────────────────────────────────────────────────────────────────
-  app.get("/api/vendor/dashboard", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/vendor/dashboard", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1);
@@ -2311,7 +2472,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/provider/dashboard", requireAuth, requireRole("service_provider", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/provider/dashboard", requireAuth, requireRole("service_provider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const [profile] = await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
@@ -2340,18 +2501,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/vendor/low-stock", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/vendor/low-stock", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const rows = await db.select().from(products).where(eq(products.vendorId, user.id)).orderBy(products.stock);
     return res.json(rows.filter(p => p.stock <= 10));
   });
 
-  app.put("/api/vendor/products/:id/stock", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.put("/api/vendor/products/:id/stock", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { stock } = z.object({ stock: z.number().int().min(0) }).parse(req.body);
       const [product] = await db.select().from(products).where(and(eq(products.id, param(req, "id")), eq(products.vendorId, user.id))).limit(1);
-      if (!product && user.role !== "admin") return res.status(404).json({ message: "Product not found" });
+      if (!product) return res.status(404).json({ message: "Product not found" });
       const [updated] = await db.update(products).set({ stock, inStock: stock > 0 }).where(eq(products.id, param(req, "id"))).returning();
       return res.json(updated);
     } catch (err: any) {
@@ -2363,7 +2524,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // SHOPPER PROFILE & DASHBOARD
   // ────────────────────────────────────────────────────────────────
-  app.get("/api/shopper/me", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/shopper/me", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const [profile] = await db.select().from(shopperProfiles).where(eq(shopperProfiles.userId, user.id)).limit(1);
     const [[orderCount], [wishCount], [bookingCount]] = await Promise.all([
@@ -2379,7 +2540,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  app.put("/api/shopper/me", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/shopper/me", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const data = z.object({
       preferredCategories: z.array(z.string()).optional(),
@@ -2400,7 +2561,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // VENDOR TOOLS - FLASH DEALS
   // ────────────────────────────────────────────────────────────────
-  app.get("/api/vendor/flash-deals", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.get("/api/vendor/flash-deals", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const vendorProds = await db.select().from(products).where(eq(products.vendorId, user.id));
@@ -2414,7 +2575,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch { return res.json([]); }
   });
 
-  app.post("/api/vendor/flash-deals", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/vendor/flash-deals", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { productId, dealPrice, discountPercent, durationHours } = z.object({
@@ -2441,15 +2602,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/vendor/flash-deals/:id", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.delete("/api/vendor/flash-deals/:id", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const [deal] = await db.select().from(flashDeals).where(eq(flashDeals.id, param(req, "id"))).limit(1);
       if (!deal) return res.status(404).json({ message: "Not found" });
-      if (user.role !== "admin") {
-        const [product] = await db.select().from(products).where(eq(products.id, deal.productId)).limit(1);
-        if (!product || product.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
-      }
+      const [product] = await db.select().from(products).where(eq(products.id, deal.productId)).limit(1);
+      if (!product || product.vendorId !== user.id) return res.status(403).json({ message: "Forbidden" });
       await db.update(flashDeals).set({ isActive: false }).where(eq(flashDeals.id, param(req, "id")));
       return res.json({ success: true });
     } catch { return res.status(500).json({ message: "Server error" }); }
@@ -2458,7 +2617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // VENDOR TOOLS - PROMOTE / FEATURE
   // ────────────────────────────────────────────────────────────────
-  app.post("/api/vendor/promote/:id", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/vendor/promote/:id", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const [product] = await db.select().from(products).where(and(eq(products.id, param(req, "id")), eq(products.vendorId, user.id))).limit(1);
@@ -2572,7 +2731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { wallet: updatedWallet, transaction: tx };
   }
 
-  app.get("/api/wallet", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/wallet", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const wallet = await getOrCreateWallet(user.id);
     const recent = await db.select().from(transactions).where(eq(transactions.userId, user.id)).orderBy(desc(transactions.createdAt)).limit(30);
@@ -2648,11 +2807,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  app.post("/api/wallet/deposit/manual", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/wallet/deposit/manual", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
+      if (process.env.WALLET_PAYMENTS_ENABLED !== "true") return res.status(503).json({ message: "Wallet funding is not available yet" });
       const user = (req as any).user;
       const { amount, method, reference } = z.object({
-        amount: z.number().int().positive(),
+        amount: z.number().int().min(10).max(100_000),
         method: z.string().default("manual_mobile_money"),
         reference: z.string().optional(),
       }).parse(req.body);
@@ -2670,8 +2830,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/wallet/pay-order/:orderId", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/wallet/pay-order/:orderId", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
+      if (process.env.WALLET_PAYMENTS_ENABLED !== "true") return res.status(503).json({ message: "Wallet payments are not available yet" });
       const user = (req as any).user;
       const [order] = await db.select().from(orders).where(and(eq(orders.id, param(req, "orderId")), eq(orders.userId, user.id))).limit(1);
       if (!order) return res.status(404).json({ message: "Order not found" });
@@ -2747,14 +2908,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.put("/api/admin/wallet/deposits/:id/confirm", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
-    const [tx] = await db.select().from(transactions).where(eq(transactions.id, param(req, "id"))).limit(1);
-    if (!tx || tx.status !== "pending" || !tx.userId) return res.status(404).json({ message: "Pending deposit not found" });
-    const wallet = await getOrCreateWallet(tx.userId);
-    const after = wallet.balance + tx.amount;
-    await db.update(wallets).set({ balance: after, updatedAt: new Date() }).where(eq(wallets.id, wallet.id));
-    const [updated] = await db.update(transactions).set({ status: "completed", balanceBefore: wallet.balance, balanceAfter: after }).where(eq(transactions.id, tx.id)).returning();
-    await db.insert(notifications).values({ userId: tx.userId, type: "wallet", title: "Deposit Confirmed", body: `D ${tx.amount.toLocaleString()} has been added to your wallet.`, icon: "wallet", color: "#0EA47A" });
-    return res.json(updated);
+    try {
+      if (process.env.WALLET_PAYMENTS_ENABLED !== "true") return res.status(503).json({ message: "Wallet funding is not available yet" });
+      const admin = (req as any).user;
+      const { currentPassword, reason } = z.object({ currentPassword: z.string().min(1), reason: z.string().trim().min(5).max(500) }).parse(req.body);
+      if (!(await comparePassword(currentPassword, admin.password))) return res.status(403).json({ message: "Administrator reauthentication failed" });
+      const transactionId = param(req, "id");
+      const result = await db.transaction(async (databaseTx) => {
+        await databaseTx.execute(sql`SELECT id FROM transactions WHERE id = ${transactionId} FOR UPDATE`);
+        const [deposit] = await databaseTx.select().from(transactions).where(eq(transactions.id, transactionId)).limit(1);
+        if (!deposit || deposit.status !== "pending" || !deposit.userId || deposit.type !== "deposit") throw new Error("PENDING_DEPOSIT_NOT_FOUND");
+        await databaseTx.execute(sql`SELECT id FROM wallets WHERE user_id = ${deposit.userId} FOR UPDATE`);
+        let [wallet] = await databaseTx.select().from(wallets).where(eq(wallets.userId, deposit.userId)).limit(1);
+        if (!wallet) [wallet] = await databaseTx.insert(wallets).values({ userId: deposit.userId }).returning();
+        const after = wallet.balance + deposit.amount;
+        await databaseTx.update(wallets).set({ balance: after, updatedAt: new Date() }).where(eq(wallets.id, wallet.id));
+        const [updated] = await databaseTx.update(transactions).set({ status: "completed", balanceBefore: wallet.balance, balanceAfter: after }).where(eq(transactions.id, deposit.id)).returning();
+        await databaseTx.insert(notifications).values({ userId: deposit.userId, type: "wallet", title: "Deposit Confirmed", body: `D ${deposit.amount.toLocaleString()} has been added to your wallet.`, icon: "wallet", color: "#0EA47A" });
+        await databaseTx.insert(auditLogs).values({ actorId: admin.id, action: "wallet.deposit_confirmed", entityType: "transaction", entityId: deposit.id, metadata: { userId: deposit.userId, amount: deposit.amount, reason } });
+        return updated;
+      });
+      return res.json(result);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid confirmation request" });
+      if (error.message === "PENDING_DEPOSIT_NOT_FOUND") return res.status(404).json({ message: "Pending deposit not found" });
+      return res.status(500).json({ message: "Deposit confirmation failed" });
+    }
   });
 
   app.get("/api/admin/commissions", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
@@ -2775,13 +2954,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/admin/payouts/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const admin = (req as any).user;
-      const { status, note } = z.object({ status: z.enum(["approved", "rejected", "completed"]), note: z.string().trim().max(1000).optional() }).parse(req.body);
-      const [current] = await db.select().from(payouts).where(eq(payouts.id, param(req, "id"))).limit(1);
-      if (!current) return res.status(404).json({ message: "Payout request not found" });
-      const allowed = (current.status === "pending" && ["approved", "rejected"].includes(status)) || (current.status === "approved" && ["completed", "rejected"].includes(status));
-      if (!allowed) return res.status(409).json({ message: "That payout status change is not allowed" });
+      const { status, note, currentPassword } = z.object({ status: z.enum(["approved", "rejected", "completed"]), note: z.string().trim().max(1000).optional(), currentPassword: z.string().optional() }).parse(req.body);
+      if (status === "completed" && (!currentPassword || !(await comparePassword(currentPassword, admin.password)))) {
+        return res.status(403).json({ message: "Administrator reauthentication is required to complete a payout" });
+      }
 
-      const updated = await db.transaction(async (tx) => {
+      const result = await db.transaction(async (tx) => {
+        const payoutId = param(req, "id");
+        await tx.execute(sql`SELECT id FROM payouts WHERE id = ${payoutId} FOR UPDATE`);
+        const [current] = await tx.select().from(payouts).where(eq(payouts.id, payoutId)).limit(1);
+        if (!current) throw new Error("PAYOUT_NOT_FOUND");
+        const allowed = (current.status === "pending" && ["approved", "rejected"].includes(status)) || (current.status === "approved" && ["completed", "rejected"].includes(status));
+        if (!allowed) throw new Error("INVALID_PAYOUT_TRANSITION");
         if (status === "completed") {
           await tx.execute(sql`SELECT id FROM wallets WHERE user_id = ${current.userId} FOR UPDATE`);
           const [wallet] = await tx.select().from(wallets).where(eq(wallets.userId, current.userId)).limit(1);
@@ -2795,13 +2979,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
         const [row] = await tx.update(payouts).set({ status, note, updatedAt: new Date() }).where(eq(payouts.id, current.id)).returning();
-        return row;
+        return { row, current };
       });
-      await audit(admin.id, `payout.${status}`, "payout", current.id, { amount: current.amount, userId: current.userId, note });
-      await notifyUser(current.userId, "payment", "Payout Updated", `Your payout request for D ${current.amount.toLocaleString()} is now ${status}.`, "/wallet", { payoutId: current.id, status });
-      return res.json(updated);
+      await audit(admin.id, `payout.${status}`, "payout", result.current.id, { amount: result.current.amount, userId: result.current.userId, note });
+      await notifyUser(result.current.userId, "payment", "Payout Updated", `Your payout request for D ${result.current.amount.toLocaleString()} is now ${status}.`, "/wallet", { payoutId: result.current.id, status });
+      return res.json(result.row);
     } catch (error: any) {
       if (error.name === "ZodError") return res.status(400).json({ message: "Invalid payout update" });
+      if (error.message === "PAYOUT_NOT_FOUND") return res.status(404).json({ message: "Payout request not found" });
+      if (error.message === "INVALID_PAYOUT_TRANSITION") return res.status(409).json({ message: "That payout status change is not allowed" });
       if (error.message === "Insufficient settlement balance") return res.status(409).json({ message: error.message });
       return res.status(500).json({ message: "Payout update failed" });
     }
@@ -2988,10 +3174,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/delivery/dispatch", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/delivery/dispatch", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { orderId, pickupAddress, pickupLatitude, pickupLongitude, dropoffAddress, dropoffLatitude, dropoffLongitude, deliveryFee } = z.object({
+      const { orderId, pickupAddress, pickupLatitude, pickupLongitude } = z.object({
         orderId: z.string(), pickupAddress: z.string(), pickupLatitude: z.number().optional(), pickupLongitude: z.number().optional(), dropoffAddress: z.string(), dropoffLatitude: z.number().optional(), dropoffLongitude: z.number().optional(), deliveryFee: z.number().int().default(0),
       }).parse(req.body);
       const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
@@ -2999,12 +3185,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await ensureVendorFulfillments(order);
       const parties = await getOrderParties(order);
       const fulfillments = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, orderId));
-      if (user.role !== "admin" && !parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
-      if (user.role !== "admin" && (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup"))) return res.status(409).json({ message: "Every seller must mark their items ready before dispatch." });
-      const safeDropoffAddress = user.role === "admin" ? dropoffAddress : `${order.address}, ${order.city}`;
-      const safeDropoffLatitude = user.role === "admin" ? dropoffLatitude : order.deliveryLatitude;
-      const safeDropoffLongitude = user.role === "admin" ? dropoffLongitude : order.deliveryLongitude;
-      const safeDeliveryFee = user.role === "admin" ? deliveryFee : order.shipping;
+      if (!parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
+      if (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup")) return res.status(409).json({ message: "Every seller must mark their items ready before dispatch." });
+      const safeDropoffAddress = `${order.address}, ${order.city}`;
+      const safeDropoffLatitude = order.deliveryLatitude;
+      const safeDropoffLongitude = order.deliveryLongitude;
+      const safeDeliveryFee = order.shipping;
       const [delivery] = await db.insert(deliveries).values({ orderId, pickupAddress, pickupLatitude, pickupLongitude, dropoffAddress: safeDropoffAddress, dropoffLatitude: safeDropoffLatitude, dropoffLongitude: safeDropoffLongitude, deliveryFee: safeDeliveryFee, status: "searching" }).returning();
       const riders = await db.select().from(deliveryRiders).where(and(eq(deliveryRiders.isOnline, true), eq(deliveryRiders.isAvailable, true), eq(deliveryRiders.verificationStatus, "verified")));
       const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, pickupLatitude, pickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
@@ -3086,12 +3272,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/delivery/requests/:id/decline", requireAuth, requireRole("delivery_rider"), declineDeliveryRequest);
   app.post("/api/delivery-requests/:id/decline", requireAuth, requireRole("delivery_rider"), declineDeliveryRequest);
 
-  app.put("/api/delivery/:id/status", requireAuth, requireRole("delivery_rider", "admin"), async (req: Request, res: Response) => {
+  app.put("/api/delivery/:id/status", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const { status } = z.object({ status: z.enum(["picked_up", "in_transit", "delivered", "failed", "cancelled"]) }).parse(req.body);
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, param(req, "id"))).limit(1);
     if (!delivery) return res.status(404).json({ message: "Delivery not found" });
-    if (user.role !== "admin" && delivery.riderId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    if (delivery.riderId !== user.id) return res.status(403).json({ message: "Forbidden" });
     if (!canChangeDeliveryStatus(user.role, delivery.status, status)) {
       const message = ["picked_up", "delivered"].includes(status)
         ? `${status === "picked_up" ? "Pickup" : "Delivery"} must be confirmed with the one-time QR code.`
@@ -3122,15 +3308,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ────────────────────────────────────────────────────────────────
   // SUPPORT TICKETS & CHAT-READY MESSAGING
   // ────────────────────────────────────────────────────────────────
-  app.get("/api/support/tickets", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/support/tickets", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const rows = user.role === "admin"
-      ? await db.select().from(supportTickets).orderBy(desc(supportTickets.createdAt)).limit(200)
-      : await db.select().from(supportTickets).where(eq(supportTickets.userId, user.id)).orderBy(desc(supportTickets.createdAt)).limit(100);
+    const rows = await db.select().from(supportTickets).where(eq(supportTickets.userId, user.id)).orderBy(desc(supportTickets.createdAt)).limit(100);
     return res.json(rows);
   });
 
-  app.post("/api/support/tickets", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/support/tickets", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { subject, message, priority } = z.object({
@@ -3144,6 +3328,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (err.name === "ZodError") return res.status(400).json({ message: err.errors[0]?.message || "Invalid support request" });
       return res.status(500).json({ message: "Server error" });
     }
+  });
+
+  app.get("/api/admin/support/tickets", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
+    const rows = await db.select().from(supportTickets).orderBy(desc(supportTickets.createdAt)).limit(200);
+    return res.json(rows);
+  });
+
+  app.put("/api/admin/support/tickets/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user;
+      const { status } = z.object({ status: z.enum(["open", "in_progress", "resolved", "closed"]) }).parse(req.body);
+      const [ticket] = await db.update(supportTickets).set({ status, updatedAt: new Date() }).where(eq(supportTickets.id, param(req, "id"))).returning();
+      if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
+      await audit(admin.id, `support.${status}`, "support_ticket", ticket.id);
+      if (ticket.userId) await notifyUser(ticket.userId, "support", "Support ticket updated", `Your support ticket is now ${status.replace(/_/g, " ")}.`, "/support", { ticketId: ticket.id });
+      return res.json(ticket);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Invalid support status" });
+      return res.status(500).json({ message: "Support ticket update failed" });
+    }
+  });
+
+  app.get("/api/admin/returns", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
+    const rows = await db.select({ request: returnRequests, orderTotal: orders.total, orderStatus: orders.status, customer: users })
+      .from(returnRequests)
+      .innerJoin(orders, eq(returnRequests.orderId, orders.id))
+      .innerJoin(users, eq(returnRequests.userId, users.id))
+      .orderBy(desc(returnRequests.createdAt));
+    return res.json(rows.map(({ request, orderTotal, orderStatus, customer }) => ({ ...request, orderTotal, orderStatus, customer: safeUser(customer) })));
+  });
+
+  app.put("/api/admin/returns/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user;
+      const { status, resolution } = z.object({ status: z.enum(["reviewing", "approved", "rejected", "refunded", "closed"]), resolution: z.string().trim().min(3).max(2000) }).parse(req.body);
+      const [request] = await db.update(returnRequests).set({ status, resolution, updatedAt: new Date() }).where(eq(returnRequests.id, param(req, "id"))).returning();
+      if (!request) return res.status(404).json({ message: "Return request not found" });
+      await audit(admin.id, `return.${status}`, "return_request", request.id, { orderId: request.orderId, resolution });
+      await notifyUser(request.userId, "return", "Return request updated", `Your ${request.requestType} request is now ${status}.`, "/returns", { returnRequestId: request.id });
+      return res.json(request);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid return update" });
+      return res.status(500).json({ message: "Return request update failed" });
+    }
+  });
+
+  app.get("/api/admin/audit-logs", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
+    const rows = await db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(500);
+    return res.json(rows);
   });
 
   app.get("/api/customer/returns", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
@@ -3243,7 +3476,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/conversations", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/conversations", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const rows = await db.select().from(messages).where(eq(messages.senderId, user.id)).orderBy(desc(messages.createdAt)).limit(50);
     return res.json(rows);
@@ -3254,36 +3487,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // END-TO-END ORDER TRACKING, QR VERIFICATION, DISPATCH & ESCROW
   // ────────────────────────────────────────────────────────────────
 
-  app.get("/api/orders/:id/tracking", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/orders/:id/tracking", requireAuth, requireRole("user", "vendor", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const orderId = param(req, "id");
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ message: "Order not found" });
     const parties = await getOrderParties(order);
-    const allowed = user.role === "admin" || order.userId === user.id || order.riderId === user.id || parties.vendorIds.includes(user.id);
+    const allowed = order.userId === user.id || order.riderId === user.id || parties.vendorIds.includes(user.id);
     if (!allowed) return res.status(403).json({ message: "Forbidden" });
     const events = await db.select().from(orderTrackingEvents).where(eq(orderTrackingEvents.orderId, orderId)).orderBy(desc(orderTrackingEvents.createdAt));
     const qrs = await db.select().from(orderQrCodes).where(eq(orderQrCodes.orderId, orderId)).orderBy(desc(orderQrCodes.createdAt));
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
     const latestRiderLocation = delivery?.riderId ? await db.select().from(riderLocations).where(eq(riderLocations.riderId, delivery.riderId)).orderBy(desc(riderLocations.createdAt)).limit(1) : [];
-    const visibleQrs = user.role === "admin"
-      ? qrs
-      : user.role === "user"
+    const visibleQrs = user.role === "user"
         ? qrs.filter((qr) => qr.purpose === "delivery")
         : user.role === "vendor"
           ? qrs.filter((qr) => qr.purpose === "pickup")
           : [];
-    const visibleOrder = (user.role === "user" || user.role === "admin") ? order : { ...order, qrCode: null };
+    const visibleOrder = safeOrder(order);
     return res.json({ order: visibleOrder, events, qrs: visibleQrs, delivery: delivery || null, riderLocation: latestRiderLocation[0] || null });
   });
 
-  app.post("/api/orders/:id/confirm-payment", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/orders/:id/confirm-payment", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     try {
+      if (process.env.WALLET_PAYMENTS_ENABLED !== "true") return res.status(503).json({ message: "Wallet payments are not available yet" });
       const user = (req as any).user;
       const orderId = param(req, "id");
       const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
       if (!order) return res.status(404).json({ message: "Order not found" });
-      if (user.role !== "admin" && order.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
+      if (order.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
       if (order.paymentMethod === "wave") return res.status(409).json({ message: "Wave payments are confirmed only by a signed Wave webhook" });
       if (order.paymentStatus === "paid" || order.status === "paid") return res.status(409).json({ message: "Order is already paid" });
       const { method, reference } = z.object({ method: z.literal("wallet").default("wallet"), reference: z.string().optional() }).parse(req.body || {});
@@ -3316,15 +3548,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/orders/:id/confirm-vendor", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/orders/:id/confirm-vendor", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const orderId = param(req, "id");
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ message: "Order not found" });
-    if (user.role === "admin") {
-      const [updated] = await db.update(orders).set({ status: "confirmed" as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
-      return res.json(updated);
-    }
     await ensureVendorFulfillments(order);
     const [fulfillment] = await db.select().from(orderVendorFulfillments).where(and(eq(orderVendorFulfillments.orderId, order.id), eq(orderVendorFulfillments.vendorId, user.id))).limit(1);
     if (!fulfillment) return res.status(403).json({ message: "Forbidden" });
@@ -3338,16 +3566,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json({ ...updated, vendorStatus: "confirmed" });
   });
 
-  app.post("/api/orders/:id/ready-for-pickup", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/orders/:id/ready-for-pickup", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const orderId = param(req, "id");
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ message: "Order not found" });
-    if (user.role === "admin") {
-      await ensureOrderQrs(order.id);
-      const [updated] = await db.update(orders).set({ status: "ready_for_pickup" as any, updatedAt: new Date() }).where(eq(orders.id, order.id)).returning();
-      return res.json(updated);
-    }
     await ensureVendorFulfillments(order);
     const [fulfillment] = await db.select().from(orderVendorFulfillments).where(and(eq(orderVendorFulfillments.orderId, order.id), eq(orderVendorFulfillments.vendorId, user.id))).limit(1);
     if (!fulfillment) return res.status(403).json({ message: "Forbidden" });
@@ -3362,17 +3585,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json({ ...updated, vendorStatus: "ready_for_pickup" });
   });
 
-  app.post("/api/orders/:id/dispatch-rider", requireAuth, requireRole("vendor", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/orders/:id/dispatch-rider", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const orderId = param(req, "id");
       const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
       if (!order) return res.status(404).json({ message: "Order not found" });
       const parties = await getOrderParties(order);
-      if (user.role !== "admin" && !parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
+      if (!parties.vendorIds.includes(user.id)) return res.status(403).json({ message: "Forbidden" });
       await ensureVendorFulfillments(order);
       const fulfillments = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, order.id));
-      if (user.role !== "admin" && (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup"))) {
+      if (fulfillments.length === 0 || fulfillments.some((row) => row.status !== "ready_for_pickup")) {
         return res.status(409).json({ message: "Every seller must mark their items ready before dispatching a rider." });
       }
       const body = z.object({ pickupAddress: z.string().optional(), pickupLatitude: z.number().optional(), pickupLongitude: z.number().optional(), deliveryFee: z.number().int().optional() }).parse(req.body || {});
@@ -3404,7 +3627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/orders/:id/confirm-pickup-qr", requireAuth, requireRole("vendor", "delivery_rider", "admin"), async (req: Request, res: Response) => {
+  app.post("/api/orders/:id/confirm-pickup-qr", requireAuth, requireRole("vendor", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const orderId = param(req, "id");
     const { code } = z.object({ code: z.string().min(6) }).parse(req.body);
@@ -3412,7 +3635,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!orderBefore) return res.status(404).json({ message: "Order not found" });
     const parties = await getOrderParties(orderBefore);
     const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
-    if (user.role !== "admin" && (!delivery?.riderId || delivery.status !== "assigned")) return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
+    if (!delivery?.riderId || delivery.status !== "assigned") return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
     if (!canVerifyOrderQr({
       actorId: user.id,
       actorRole: user.role,
@@ -3433,7 +3656,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json({ order, verified: true });
   });
 
-  app.post("/api/orders/:id/confirm-delivery-qr", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/orders/:id/confirm-delivery-qr", requireAuth, requireRole("user", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const orderId = param(req, "id");
     const { code } = z.object({ code: z.string().min(6) }).parse(req.body);
@@ -3441,7 +3664,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!orderBefore) return res.status(404).json({ message: "Order not found" });
     const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
     if (!canVerifyOrderQr({ actorId: user.id, actorRole: user.role, purpose: "delivery", orderUserId: orderBefore.userId, orderRiderId: orderBefore.riderId, deliveryRiderId: deliveryBefore?.riderId })) return res.status(403).json({ message: "Only the shopper or assigned rider can confirm this delivery" });
-    if (user.role !== "admin" && (!deliveryBefore || !["picked_up", "in_transit"].includes(deliveryBefore.status))) return res.status(409).json({ message: "Pickup must be confirmed before delivery" });
+    if (!deliveryBefore || !["picked_up", "in_transit"].includes(deliveryBefore.status)) return res.status(409).json({ message: "Pickup must be confirmed before delivery" });
     const [qr] = await db.select().from(orderQrCodes).where(and(eq(orderQrCodes.orderId, orderId), eq(orderQrCodes.code, code), eq(orderQrCodes.purpose, "delivery"), eq(orderQrCodes.status, "active"))).limit(1);
     if (!qr) return res.status(400).json({ message: "Invalid or expired delivery QR code" });
     const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
@@ -3458,7 +3681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
 
 
-  app.post("/api/orders/verify-qr", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/orders/verify-qr", requireAuth, requireRole("user", "vendor", "delivery_rider"), async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       const { code } = z.object({ code: z.string().min(6) }).parse(req.body);
@@ -3470,9 +3693,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [deliveryBefore] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderBefore.id)).limit(1);
 
       if (qr.purpose === "pickup") {
-        if (user.role !== "admin" && (!deliveryBefore?.riderId || deliveryBefore.status !== "assigned")) return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
+        if (!deliveryBefore?.riderId || deliveryBefore.status !== "assigned") return res.status(409).json({ message: "A rider must be assigned before pickup can be verified" });
         const allowed = canVerifyOrderQr({ actorId: user.id, actorRole: user.role, purpose: "pickup", orderUserId: orderBefore.userId, orderRiderId: orderBefore.riderId, deliveryRiderId: deliveryBefore?.riderId, vendorIds: parties.vendorIds });
-        if (!allowed) return res.status(403).json({ message: "Only the vendor, assigned rider, or admin can confirm pickup" });
+        if (!allowed) return res.status(403).json({ message: "Only the vendor or assigned rider can confirm pickup" });
         const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
         if (!consumedQr) return res.status(409).json({ message: "This pickup code was already used" });
         const [order] = await db.update(orders).set({ status: "picked_up" as any, pickupConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderBefore.id)).returning();
@@ -3484,8 +3707,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (qr.purpose === "delivery") {
         const allowed = canVerifyOrderQr({ actorId: user.id, actorRole: user.role, purpose: "delivery", orderUserId: orderBefore.userId, orderRiderId: orderBefore.riderId, deliveryRiderId: deliveryBefore?.riderId });
-        if (!allowed) return res.status(403).json({ message: "Only the shopper, assigned rider, or admin can confirm delivery" });
-        if (user.role !== "admin" && (!deliveryBefore || !["picked_up", "in_transit"].includes(deliveryBefore.status))) return res.status(409).json({ message: "Pickup must be confirmed before delivery" });
+        if (!allowed) return res.status(403).json({ message: "Only the shopper or assigned rider can confirm delivery" });
+        if (!deliveryBefore || !["picked_up", "in_transit"].includes(deliveryBefore.status)) return res.status(409).json({ message: "Pickup must be confirmed before delivery" });
         const [consumedQr] = await db.update(orderQrCodes).set({ usedBy: user.id, usedAt: new Date(), status: "used" }).where(and(eq(orderQrCodes.id, qr.id), eq(orderQrCodes.status, "active"))).returning();
         if (!consumedQr) return res.status(409).json({ message: "This delivery code was already used" });
         const [order] = await db.update(orders).set({ status: "delivered" as any, deliveryConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderBefore.id)).returning();
@@ -3505,12 +3728,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/orders/:id/complete-and-release-payment", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/orders/:id/complete-and-release-payment", requireAuth, requireRole("user"), async (req: Request, res: Response) => {
     const user = (req as any).user;
     const orderId = param(req, "id");
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ message: "Order not found" });
-    if (user.role !== "admin" && order.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
+    if (order.userId !== user.id) return res.status(403).json({ message: "Forbidden" });
     if (!canReleaseDeliveryPayment(order)) return res.status(409).json({ message: "Delivery must be verified with the one-time delivery code before payment can be released" });
     const result = await releaseEscrowForOrder(order, user);
     return res.json(result);
@@ -3601,12 +3824,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const authToken = socket.handshake?.auth?.token;
         const headerToken = String(socket.handshake?.headers?.authorization || "").replace(/^Bearer\s+/i, "");
         const token = authToken || headerToken;
-        const user = token ? await getSessionUser(token) : null;
-        if (user) {
-          socket.data.user = safeSocketUser(user);
-          socket.join(`user:${user.id}`);
-          socket.join(`role:${user.role}`);
+        const audience = parseClientAudience(socket.handshake?.auth?.audience || socket.handshake?.headers?.["x-mansamart-app"]);
+        const session = token ? await getSession(token) : null;
+        if (!session || !audience || session.session.audience !== audience || !roleAllowedForAudience(audience, session.user.role)) {
+          return next(new Error("Unauthorized realtime connection"));
         }
+        socket.data.user = safeSocketUser(session.user);
+        socket.data.audience = audience;
+        socket.join(`user:${session.user.id}`);
+        socket.join(`role:${session.user.role}`);
         next();
       } catch (error: any) {
         next(error);
@@ -3614,11 +3840,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
 
     io.on("connection", (socket: any) => {
-      socket.on("order:join", (orderId: string) => {
-        if (orderId) socket.join(`order:${orderId}`);
+      socket.on("order:join", async (orderId: string) => {
+        if (!orderId) return;
+        const user = socket.data.user;
+        const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+        if (!order) return socket.emit("room:error", { room: "order", message: "Order not found" });
+        const parties = await getOrderParties(order);
+        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.orderId, orderId)).limit(1);
+        const allowed = user.role === "admin" || order.userId === user.id || parties.vendorIds.includes(user.id) || order.riderId === user.id || delivery?.riderId === user.id;
+        if (!allowed) return socket.emit("room:error", { room: "order", message: "Forbidden" });
+        socket.join(`order:${orderId}`);
       });
-      socket.on("delivery:join", (deliveryId: string) => {
-        if (deliveryId) socket.join(`delivery:${deliveryId}`);
+      socket.on("delivery:join", async (deliveryId: string) => {
+        if (!deliveryId) return;
+        const user = socket.data.user;
+        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, deliveryId)).limit(1);
+        if (!delivery) return socket.emit("room:error", { room: "delivery", message: "Delivery not found" });
+        const [order] = await db.select().from(orders).where(eq(orders.id, delivery.orderId)).limit(1);
+        if (!order) return socket.emit("room:error", { room: "delivery", message: "Order not found" });
+        const parties = await getOrderParties(order);
+        const allowed = user.role === "admin" || order.userId === user.id || parties.vendorIds.includes(user.id) || delivery.riderId === user.id;
+        if (!allowed) return socket.emit("room:error", { room: "delivery", message: "Forbidden" });
+        socket.join(`delivery:${deliveryId}`);
       });
     });
 

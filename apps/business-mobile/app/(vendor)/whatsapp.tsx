@@ -44,15 +44,15 @@ type Overview = {
     whatsappOrders: number;
     whatsappRevenue: number;
   };
-  recentConversations: Array<{
+  recentConversations: {
     id: string;
     unreadCount: number;
     mode: string;
     lastMessagePreview?: string | null;
     lastMessageAt?: string | null;
     customer?: { displayName?: string | null; phone: string } | null;
-  }>;
-  campaigns: Array<{ id: string; name: string; status: string; recipientCount: number; createdAt: string }>;
+  }[];
+  campaigns: { id: string; name: string; status: string; recipientCount: number; createdAt: string }[];
 };
 
 async function apiCall<T>(path: string, method = "GET", body?: unknown): Promise<T> {

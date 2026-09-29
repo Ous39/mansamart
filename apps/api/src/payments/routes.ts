@@ -7,14 +7,15 @@ import {
   notifications,
   orderTrackingEvents,
   orders,
+  products,
   paymentAttempts,
   paymentRefunds,
   paymentWebhookEvents,
 } from "@mansamart/database/schema";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { requireAuth, requireRole } from "../auth";
+import { comparePassword, requireAuth, requireRole } from "../auth";
 import {
   createWaveCheckoutSession,
   getWaveConfig,
@@ -143,6 +144,58 @@ async function completeWavePayment(event: z.infer<typeof waveEventSchema>) {
 
       if (attempt.status !== "succeeded") {
         const paidAt = new Date();
+        await tx.execute(sql`SELECT id FROM orders WHERE id = ${attempt.orderId} FOR UPDATE`);
+        const [order] = await tx.select().from(orders).where(eq(orders.id, attempt.orderId)).limit(1);
+        if (!order) throw new Error("Order not found for completed Wave payment");
+        if (order.paymentStatus === "paid") {
+          await tx.update(paymentAttempts).set({
+            status: "requires_refund",
+            providerTransactionId: event.data.transaction_id || null,
+            providerPayload: event as Record<string, unknown>,
+            paidAt,
+            failureCode: "duplicate-order-payment",
+            failureMessage: "The order was already paid by another attempt",
+            updatedAt: paidAt,
+          }).where(eq(paymentAttempts.id, attempt.id));
+          await tx.insert(auditLogs).values({ action: "payment.duplicate_requires_refund", entityType: "payment_attempt", entityId: attempt.id, metadata: { orderId: order.id, eventId: event.id } });
+          await tx.update(paymentWebhookEvents).set({ status: "processed", processedAt: paidAt }).where(eq(paymentWebhookEvents.id, storedEvent.id));
+          return { duplicate: false, processed: true, requiresRefund: true };
+        }
+
+        const quantityByProduct = new Map<string, number>();
+        for (const item of order.items || []) quantityByProduct.set(item.productId, (quantityByProduct.get(item.productId) || 0) + item.quantity);
+        const productIds = [...quantityByProduct.keys()].sort();
+        for (const productId of productIds) await tx.execute(sql`SELECT id FROM products WHERE id = ${productId} FOR UPDATE`);
+        const inventory = productIds.length ? await tx.select().from(products).where(inArray(products.id, productIds)) : [];
+        const inventoryById = new Map(inventory.map((product) => [product.id, product]));
+        const unavailable = productIds.find((productId) => {
+          const product = inventoryById.get(productId);
+          return !product || !product.inStock || product.stock < (quantityByProduct.get(productId) || 0);
+        });
+        if (unavailable) {
+          await tx.update(paymentAttempts).set({
+            status: "requires_refund",
+            providerTransactionId: event.data.transaction_id || null,
+            providerPayload: event as Record<string, unknown>,
+            paidAt,
+            failureCode: "inventory-unavailable",
+            failureMessage: "Inventory changed before payment confirmation",
+            updatedAt: paidAt,
+          }).where(eq(paymentAttempts.id, attempt.id));
+          await tx.update(orders).set({ paymentStatus: "refund_required", updatedAt: paidAt }).where(eq(orders.id, order.id));
+          await tx.insert(auditLogs).values({ action: "payment.inventory_requires_refund", entityType: "payment_attempt", entityId: attempt.id, metadata: { orderId: order.id, productId: unavailable, eventId: event.id } });
+          if (order.userId) await tx.insert(notifications).values({ userId: order.userId, type: "payment", title: "Payment needs review", body: "Your payment was received, but an item became unavailable. Support will arrange the refund.", icon: "alert-circle-outline", color: "#E63946", actionRoute: `/order/${order.id}` });
+          await tx.update(paymentWebhookEvents).set({ status: "processed", processedAt: paidAt }).where(eq(paymentWebhookEvents.id, storedEvent.id));
+          return { duplicate: false, processed: true, requiresRefund: true };
+        }
+
+        for (const [productId, quantity] of quantityByProduct) {
+          await tx.update(products).set({
+            stock: sql`${products.stock} - ${quantity}`,
+            soldCount: sql`${products.soldCount} + ${quantity}`,
+            inStock: sql`${products.stock} - ${quantity} > 0`,
+          }).where(eq(products.id, productId));
+        }
         await tx.update(paymentAttempts).set({
           status: "succeeded",
           providerTransactionId: event.data.transaction_id || null,
@@ -153,8 +206,6 @@ async function completeWavePayment(event: z.infer<typeof waveEventSchema>) {
           updatedAt: paidAt,
         }).where(eq(paymentAttempts.id, attempt.id));
 
-        const [order] = await tx.select().from(orders).where(eq(orders.id, attempt.orderId)).limit(1);
-        if (!order) throw new Error("Order not found for completed Wave payment");
         const commission = calculateCommission(order.subtotal);
         const [existingHold] = await tx.select({ id: escrowTransactions.id }).from(escrowTransactions)
           .where(and(eq(escrowTransactions.orderId, order.id), eq(escrowTransactions.reference, attempt.id)))
@@ -313,6 +364,9 @@ export function registerPaymentRoutes(app: Express) {
       });
       return res.status(201).json(paymentResponse(updated));
     } catch (error) {
+      if ((error as any)?.code === "23505" && !attemptId) {
+        return res.status(409).json({ message: "A Wave checkout is already being created for this order", code: "checkout-in-progress" });
+      }
       const publicError = publicWaveError(error);
       if (attemptId) {
         await db.update(paymentAttempts).set({
@@ -366,7 +420,10 @@ export function registerPaymentRoutes(app: Express) {
     try {
       const config = getWaveConfig();
       const admin = (req as any).user;
-      const { reason } = z.object({ reason: z.string().trim().min(5).max(500) }).parse(req.body);
+      const { reason, currentPassword } = z.object({ reason: z.string().trim().min(5).max(500), currentPassword: z.string().min(1) }).parse(req.body);
+      if (!(await comparePassword(currentPassword, admin.password))) {
+        return res.status(403).json({ message: "Administrator reauthentication failed" });
+      }
       const paymentId = req.params.id as string;
       const [payment] = await db.select().from(paymentAttempts).where(eq(paymentAttempts.id, paymentId)).limit(1);
       if (!payment) return res.status(404).json({ message: "Payment not found" });
@@ -376,9 +433,11 @@ export function registerPaymentRoutes(app: Express) {
           .limit(1);
         return res.json(existing || { status: "succeeded" });
       }
-      if (payment.status !== "succeeded" || !payment.providerSessionId) {
-        return res.status(409).json({ message: "Only a successful Wave payment can be refunded" });
+      if (!["succeeded", "requires_refund"].includes(payment.status) || !payment.providerSessionId) {
+        return res.status(409).json({ message: "Only a captured Wave payment can be refunded" });
       }
+      const [existingRefund] = await db.select().from(paymentRefunds).where(eq(paymentRefunds.paymentAttemptId, payment.id)).limit(1);
+      if (existingRefund) return res.status(existingRefund.status === "succeeded" ? 200 : 409).json(existingRefund);
 
       const [refund] = await db.insert(paymentRefunds).values({
         paymentAttemptId: payment.id,
@@ -438,6 +497,7 @@ export function registerPaymentRoutes(app: Express) {
         }).where(eq(paymentRefunds.id, refundId)).catch(() => undefined);
       }
       if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues[0]?.message || "Invalid refund request" });
+      if ((error as any)?.code === "23505") return res.status(409).json({ message: "A refund is already in progress for this payment" });
       console.error("Wave refund error:", publicError.code);
       return res.status(publicError.status).json({ message: publicError.message, code: publicError.code });
     }

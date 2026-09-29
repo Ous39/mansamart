@@ -8,7 +8,6 @@ import {
   Platform,
   TextInput,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
@@ -25,7 +24,6 @@ const sortOptions = [
 ];
 
 export default function BrowseScreen() {
-  const insets = useSafeAreaInsets();
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedSort, setSelectedSort] = useState("popular");
@@ -62,7 +60,7 @@ export default function BrowseScreen() {
     else if (selectedSort === "rating") list.sort((a, b) => b.rating - a.rating);
     else list.sort((a, b) => (b.soldCount ?? 0) - (a.soldCount ?? 0));
     return list;
-  }, [search, selectedCategory, selectedSort, freeShipOnly, isSale, isNew, minPrice, maxPrice]);
+  }, [products, search, selectedCategory, selectedSort, freeShipOnly, isSale, isNew, minPrice, maxPrice]);
 
   const selectedCat = categories.find(c => c.id === selectedCategory);
 

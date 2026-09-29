@@ -7,14 +7,17 @@ const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
   throw new Error(
-    "DATABASE_URL is not set. Create a .env file in the project root, then restart the server. Example: DATABASE_URL=postgres://postgres:NoVirus123@localhost:5432/oceanbrown",
+    "DATABASE_URL is not set. Configure the PostgreSQL connection and restart the API.",
   );
 }
 
+const databaseSslEnabled = process.env.DATABASE_SSL === "true" || databaseUrl.includes("sslmode=require");
+const rejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false";
+
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: databaseUrl.includes("sslmode=require")
-    ? { rejectUnauthorized: false }
+  ssl: databaseSslEnabled
+    ? { rejectUnauthorized }
     : false,
 });
 

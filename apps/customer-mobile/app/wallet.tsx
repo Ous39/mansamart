@@ -2,18 +2,13 @@ import React from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
-import { apiRequest, queryClient } from "@/lib/query-client";
 
 function money(value?: number) { return `D ${(value ?? 0).toLocaleString()}`; }
 
 export default function WalletScreen() {
   const { data, isLoading } = useQuery<any>({ queryKey: ["/api/wallet"] });
-  const deposit = useMutation({
-    mutationFn: async () => apiRequest("POST", "/api/wallet/deposit/manual", { amount: 500, method: "manual_mobile_money", reference: `DEMO-${Date.now()}` }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/wallet"] }),
-  });
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
@@ -27,12 +22,7 @@ export default function WalletScreen() {
             <Text style={styles.balance}>{money(data?.wallet?.balance)}</Text>
             <Text style={styles.balanceSub}>Pending: {money(data?.wallet?.pendingBalance)} • Locked: {money(data?.wallet?.lockedBalance)}</Text>
           </View>
-          <View style={styles.actions}>
-            <Pressable style={styles.primaryBtn} onPress={() => deposit.mutate()} disabled={deposit.isPending}>
-              <Ionicons name="add-circle-outline" size={18} color="#fff" />
-              <Text style={styles.primaryBtnText}>{deposit.isPending ? "Submitting..." : "Demo Top-up D 500"}</Text>
-            </Pressable>
-          </View>
+          <View style={styles.walletNotice}><Ionicons name="shield-checkmark-outline" size={20} color={Colors.primary} /><Text style={styles.walletNoticeText}>Wallet funding will be enabled only after an approved payment provider and settlement review are complete.</Text></View>
           <Text style={styles.sectionTitle}>Recent Transactions</Text>
           {(data?.transactions ?? []).map((tx: any) => (
             <View key={tx.id} style={styles.txRow}>
@@ -63,8 +53,7 @@ const styles = StyleSheet.create({
   balanceLabel: { color: "rgba(255,255,255,0.75)", fontFamily: "Inter_500Medium", fontSize: 13 },
   balance: { color: "#fff", fontFamily: "Inter_700Bold", fontSize: 38, marginVertical: 8 },
   balanceSub: { color: "rgba(255,255,255,0.75)", fontFamily: "Inter_400Regular", fontSize: 12 },
-  actions: { flexDirection: "row", gap: 10, marginBottom: 24 }, primaryBtn: { flex: 1, backgroundColor: Colors.text, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  primaryBtnText: { color: "#fff", fontFamily: "Inter_700Bold" }, sectionTitle: { fontFamily: "Inter_700Bold", color: Colors.text, fontSize: 16, marginBottom: 10 },
+  walletNotice: { flexDirection: "row", gap: 10, backgroundColor: Colors.primaryLight, borderRadius: 14, padding: 14, marginBottom: 24 }, walletNoticeText: { flex: 1, color: Colors.textSecondary, fontFamily: "Inter_500Medium", fontSize: 12, lineHeight: 18 }, sectionTitle: { fontFamily: "Inter_700Bold", color: Colors.text, fontSize: 16, marginBottom: 10 },
   txRow: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.surface, borderRadius: 16, padding: 14, marginBottom: 10, gap: 12 },
   txIcon: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" }, txTitle: { fontFamily: "Inter_600SemiBold", color: Colors.text, fontSize: 13 },
   txMeta: { fontFamily: "Inter_400Regular", color: Colors.textMuted, fontSize: 11, marginTop: 2 }, txAmount: { fontFamily: "Inter_700Bold", fontSize: 13 }, empty: { color: Colors.textMuted, textAlign: "center", marginTop: 24 },

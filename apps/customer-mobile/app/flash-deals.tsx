@@ -9,7 +9,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { ProductCard } from "@/components/ProductCard";
-import { getApiUrl } from "@/lib/query-client";
 
 const { width } = Dimensions.get("window");
 

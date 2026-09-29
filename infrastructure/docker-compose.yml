@@ -38,6 +38,14 @@ services:
       PUBLIC_API_URL: http://${LAN_IP:-localhost}:5000
       CORS_ORIGINS: http://localhost:4173,http://localhost:4174,http://localhost:8081,http://localhost:8082,http://localhost:8083
       ADMIN_CORS_ORIGINS: http://localhost:4174
+      ADMIN_MFA_REQUIRED: ${ADMIN_MFA_REQUIRED:-false}
+      ADMIN_MFA_PEPPER: ${ADMIN_MFA_PEPPER:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-MansaMart <no-reply@mansamart.gm>}
       SEED_ON_START: ${SEED_ON_START:-true}
       WAVE_ENABLED: ${WAVE_ENABLED:-false}
       WAVE_GMD_CONFIRMED: ${WAVE_GMD_CONFIRMED:-false}

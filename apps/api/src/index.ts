@@ -61,10 +61,10 @@ function setupCors() {
 
 function setupBodyParsing() {
   app.use(express.json({
-    limit: "25mb",
+    limit: "7mb",
     verify: (req, _res, buffer) => { req.rawBody = buffer; },
   }));
-  app.use(express.urlencoded({ extended: false, limit: "25mb" }));
+  app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 }
 
 function setupRequestLogging() {

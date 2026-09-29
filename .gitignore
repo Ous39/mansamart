@@ -43,3 +43,7 @@ yarn-error.*
 .env
 **/.env
 !**/.env.example
+.env.docker
+.agents/
+apps/api/uploads/*
+!apps/api/uploads/.gitkeep

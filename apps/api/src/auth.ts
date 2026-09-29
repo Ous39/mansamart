@@ -4,6 +4,8 @@ import { sessions, users } from "@mansamart/database/schema";
 import { eq, and, gt } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import * as crypto from "crypto";
+import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
+import { hashSessionToken } from "./session-security";
 
 export function generateToken(): string {
   return crypto.randomBytes(48).toString("hex");
@@ -25,26 +27,30 @@ export async function comparePin(pin: string, hash: string): Promise<boolean> {
   return bcrypt.compare(pin, hash);
 }
 
-export async function createSession(userId: string, lifetimeMs = 30 * 24 * 60 * 60 * 1000): Promise<string> {
+export async function createSession(userId: string, audience: ClientAudience, lifetimeMs = 30 * 24 * 60 * 60 * 1000): Promise<string> {
   const token = generateToken();
   const expiresAt = new Date(Date.now() + lifetimeMs);
-  await db.insert(sessions).values({ userId, token, expiresAt });
+  await db.insert(sessions).values({ userId, token: hashSessionToken(token), audience, expiresAt });
   return token;
 }
 
-export async function getSessionUser(token: string) {
+export async function getSession(token: string) {
   const [session] = await db
     .select({ session: sessions, user: users })
     .from(sessions)
     .innerJoin(users, eq(sessions.userId, users.id))
-    .where(and(eq(sessions.token, token), gt(sessions.expiresAt, new Date())))
+    .where(and(eq(sessions.token, hashSessionToken(token)), gt(sessions.expiresAt, new Date())))
     .limit(1);
 
-  return session?.user ?? null;
+  return session ?? null;
+}
+
+export async function getSessionUser(token: string) {
+  return (await getSession(token))?.user ?? null;
 }
 
 export async function deleteSession(token: string): Promise<void> {
-  await db.delete(sessions).where(eq(sessions.token, token));
+  await db.delete(sessions).where(eq(sessions.token, hashSessionToken(token)));
 }
 
 export function getTokenFromRequest(req: Request): string | null {
@@ -57,18 +63,26 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const token = getTokenFromRequest(req);
   if (!token) return res.status(401).json({ message: "Unauthorized" });
 
-  const user = await getSessionUser(token);
-  if (!user) return res.status(401).json({ message: "Unauthorized" });
+  const session = await getSession(token);
+  const audience = parseClientAudience(req.header("x-mansamart-app"));
+  if (!session || !audience || session.session.audience !== audience || !roleAllowedForAudience(audience, session.user.role)) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
 
-  (req as any).user = user;
+  (req as any).user = session.user;
+  (req as any).session = session.session;
   next();
 }
 
 export async function optionalAuth(req: Request, res: Response, next: NextFunction) {
   const token = getTokenFromRequest(req);
   if (token) {
-    const user = await getSessionUser(token);
-    if (user) (req as any).user = user;
+    const session = await getSession(token);
+    const audience = parseClientAudience(req.header("x-mansamart-app"));
+    if (session && audience && session.session.audience === audience && roleAllowedForAudience(audience, session.user.role)) {
+      (req as any).user = session.user;
+      (req as any).session = session.session;
+    }
   }
   next();
 }

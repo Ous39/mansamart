@@ -60,6 +60,14 @@ When using a physical phone, copy the relevant application's `.env.example` to `
 
 ### Windows one-click Customer app launcher
 
+For one menu that can open any MansaMart application, start every Docker service, or run the complete verification suite, double-click:
+
+```text
+run-mansamart.bat
+```
+
+The individual launchers below remain available when you want to open one application directly.
+
 Install Node.js 20 or later, Docker Desktop, and Expo Go on the phone. Start Docker Desktop, then double-click:
 
 ```text
@@ -100,6 +108,16 @@ run-web.bat
 
 Choose option 1 to install the locked dependencies, start PostgreSQL and the API, load the development data, wait for the API health check, and open the general marketplace at `http://localhost:4173`. Choose option 2 to stop the local containers while preserving the database volume.
 
+### Windows one-click Administrator launcher
+
+Start Docker Desktop and double-click:
+
+```text
+run-admin.bat
+```
+
+The launcher starts PostgreSQL and the API, then opens the isolated administrator portal at `http://localhost:4174`. Development MFA is off by default. To test the complete two-step login locally, configure SMTP and `ADMIN_MFA_PEPPER`, then set `ADMIN_MFA_REQUIRED=true` in `.env.docker`.
+
 ## Docker
 
 ```bash
@@ -120,8 +138,15 @@ Local addresses:
 
 ```bash
 pnpm typecheck
+pnpm test
+pnpm lint
 pnpm build
+pnpm audit --prod --audit-level critical
 ```
+
+On Windows, double-click `audit-all.bat` to install the locked dependency graph and run type-checking, tests, lint, builds, and the critical-vulnerability gate in order. GitHub Actions runs the same checks for pull requests and the protected development branches.
+
+The complete audit currently reports two high-severity denial-of-service advisories in Expo Metro's transitive `image-size` build dependency. Forcing the patched `image-size` 2.0.3 release breaks Expo Router asset compilation, so it is not overridden. This package runs in the development/build toolchain rather than the API runtime; keep repository asset changes reviewed and upgrade Expo/Metro when it adopts the compatible patched release.
 
 ## Customer mobile milestone
 
@@ -174,7 +199,11 @@ Apply `packages/database/migrations/whatsapp_commerce_migration.sql` before enab
 - Disable `SEED_ON_START`.
 - Use managed object storage for uploads.
 - Add a licensed payment provider before treating wallet entries as real funds.
-- Enable administrator multi-factor authentication before public launch.
+- Configure SMTP and a long random `ADMIN_MFA_PEPPER`. The API always requires administrator email MFA when `NODE_ENV=production`; production administrator login fails closed if MFA delivery is not configured.
 - Store secrets outside Git and rotate them regularly.
+
+Apply `packages/database/migrations/full_system_audit_migration.sql` to an existing database before deploying this audited release. It scopes sessions to their source application, adds password-reset and administrator-MFA challenges, prevents duplicate helpful votes and profile-completion rows, and adds checkout/refund race-condition constraints.
+
+The detailed engineering and security review is in `docs/FULL_SYSTEM_AUDIT.md`.
 
 Deployment and Nginx examples are in `infrastructure/`.

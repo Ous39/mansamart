@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, Pressable, FlatList,
+  View, Text, StyleSheet, ScrollView, Pressable,
   ActivityIndicator, Platform, Dimensions, Linking, Image,
 } from "react-native";
 import { router, Stack, useLocalSearchParams } from "expo-router";

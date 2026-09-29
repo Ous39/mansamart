@@ -56,7 +56,28 @@ export const sessions = pgTable("sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   token: text("token").notNull().unique(),
+  audience: text("audience").notNull(),
   expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const adminMfaChallenges = pgTable("admin_mfa_challenges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  codeHash: text("code_hash").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  usedAt: timestamp("used_at"),
+  ipAddress: text("ip_address"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -202,6 +223,15 @@ export const reviews = pgTable("reviews", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("idx_reviews_user_target").on(table.userId, table.targetType, table.targetId),
+]);
+
+export const reviewHelpfulVotes = pgTable("review_helpful_votes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reviewId: varchar("review_id").notNull().references(() => reviews.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_review_helpful_votes_review_user").on(table.reviewId, table.userId),
 ]);
 
 export const cartItems = pgTable("cart_items", {
@@ -455,7 +485,11 @@ export const paymentAttempts = pgTable("payment_attempts", {
   paidAt: timestamp("paid_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("idx_payment_attempts_active_wave_order")
+    .on(table.orderId, table.provider)
+    .where(sql`${table.provider} = 'wave' AND ${table.status} IN ('pending', 'processing')`),
+]);
 
 export const paymentWebhookEvents = pgTable("payment_webhook_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -485,7 +519,9 @@ export const paymentRefunds = pgTable("payment_refunds", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
-});
+}, (table) => [
+  uniqueIndex("idx_payment_refunds_attempt_unique").on(table.paymentAttemptId),
+]);
 
 export const commissions = pgTable("commissions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -762,7 +798,9 @@ export const profileCompletionChecks = pgTable("profile_completion_checks", {
   lastReminderAt: timestamp("last_reminder_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("idx_profile_completion_checks_user_unique").on(table.userId),
+]);
 
 export const pushNotifications = pgTable("push_notifications", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
