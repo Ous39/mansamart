@@ -35,13 +35,13 @@ if errorlevel 1 (
 )
 where node >nul 2>&1
 if errorlevel 1 (
-  echo ERROR: Install Node.js 20 or later.
+  echo ERROR: Install Node.js 22.13 or later.
   echo https://nodejs.org/
   exit /b 1
 )
 for /f %%V in ('node -p "process.versions.node.split('.')[0]"') do set "NODE_MAJOR=%%V"
-if %NODE_MAJOR% LSS 20 (
-  echo ERROR: Node.js 20 or later is required. Found %NODE_MAJOR%.
+if %NODE_MAJOR% LSS 22 (
+  echo ERROR: Node.js 22.13 or later is required. Found %NODE_MAJOR%.
   exit /b 1
 )
 where corepack >nul 2>&1

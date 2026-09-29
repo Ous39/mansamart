@@ -46,16 +46,16 @@ if errorlevel 1 (
 where node >nul 2>&1
 if errorlevel 1 (
   echo.
-  echo ERROR: Node.js 20 or later is required.
+  echo ERROR: Node.js 22.13 or later is required.
   echo Install the Node.js LTS release and run this file again.
   echo https://nodejs.org/
   goto :failed
 )
 
 for /f %%V in ('node -p "process.versions.node.split('.')[0]"') do set "NODE_MAJOR=%%V"
-if %NODE_MAJOR% LSS 20 (
+if %NODE_MAJOR% LSS 22 (
   echo.
-  echo ERROR: Node.js 20 or later is required. Found Node.js %NODE_MAJOR%.
+  echo ERROR: Node.js 22.13 or later is required. Found Node.js %NODE_MAJOR%.
   goto :failed
 )
 

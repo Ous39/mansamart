@@ -46,7 +46,7 @@ call %PNPM_CMD% %*
 exit /b %errorlevel%
 
 :missing_node
-echo ERROR: Install Node.js 20 or later, then run this file again.
+echo ERROR: Install Node.js 22.13 or later, then run this file again.
 pause
 exit /b 1
 

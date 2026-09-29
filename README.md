@@ -29,7 +29,7 @@ Role-specific screens remain inside their corresponding application. Shared pack
 
 ## Requirements
 
-- Node.js 20 or later
+- Node.js 22.13 or later
 - pnpm 11
 - PostgreSQL 16, or Docker Desktop
 
@@ -68,7 +68,7 @@ run-mansamart.bat
 
 The individual launchers below remain available when you want to open one application directly.
 
-Install Node.js 20 or later, Docker Desktop, and Expo Go on the phone. Start Docker Desktop, then double-click:
+Install Node.js 22.13 or later, Docker Desktop, and Expo Go on the phone. Start Docker Desktop, then double-click:
 
 ```text
 run-customer.bat
@@ -80,7 +80,7 @@ Use option 3 when you want to stop the local PostgreSQL and API containers. Thei
 
 ### Windows one-click Business app launcher
 
-After installing Node.js 20+, Docker Desktop, and Expo Go, start Docker Desktop and double-click:
+After installing Node.js 22.13+, Docker Desktop, and Expo Go, start Docker Desktop and double-click:
 
 ```text
 run-business.bat
@@ -90,7 +90,7 @@ Choose option 1 for a physical Android or iPhone on the same Wi-Fi, or option 2 
 
 ### Windows one-click Rider app launcher
 
-After installing Node.js 20+, Docker Desktop, and Expo Go, start Docker Desktop and double-click:
+After installing Node.js 22.13+, Docker Desktop, and Expo Go, start Docker Desktop and double-click:
 
 ```text
 run-rider.bat
@@ -100,7 +100,7 @@ Choose option 1 for a physical Android or iPhone on the same Wi-Fi, or option 2 
 
 ### Windows one-click Website launcher
 
-After installing Node.js 20+ and Docker Desktop, start Docker Desktop and double-click:
+After installing Node.js 22.13+ and Docker Desktop, start Docker Desktop and double-click:
 
 ```text
 run-web.bat

@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 WORKDIR /workspace
 ENV CI=1 PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN apt-get update \
