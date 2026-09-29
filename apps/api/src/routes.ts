@@ -22,6 +22,7 @@ import {
 import { z } from "zod";
 import { parseClientAudience, roleAllowedForAudience, type ClientAudience } from "./client-access";
 import { registerPaymentRoutes } from "./payments/routes";
+import { registerWhatsappRoutes } from "./whatsapp/routes";
 import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
 import {
   VENDOR_FULFILLMENT_STATUSES,
@@ -572,6 +573,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   registerPaymentRoutes(app);
+  registerWhatsappRoutes(app);
 
   // ────────────────────────────────────────────────────────────────
   // FILE UPLOADS - Expo/mobile friendly base64 image upload

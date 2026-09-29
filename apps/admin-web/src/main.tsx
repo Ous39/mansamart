@@ -16,6 +16,7 @@ const sections = {
   Riders: "/api/admin/riders",
   Verification: "/api/admin/verifications",
   Finance: "/api/admin/payments",
+  WhatsApp: "/api/admin/whatsapp",
 } as const;
 type Section = keyof typeof sections;
 

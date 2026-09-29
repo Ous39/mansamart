@@ -8,6 +8,7 @@ import { apiRequest, queryClient } from "@/lib/query-client";
 import { readableError } from "@/lib/errors";
 import { shareForegroundLocation } from "@/lib/rider-location";
 import { safeBack } from "@/lib/navigation";
+import { RiderDeliveryMap } from "@/components/RiderDeliveryMap";
 
 function money(value?: number) { return `D ${(Number(value) || 0).toLocaleString()}`; }
 function shortId(id?: string) { return String(id || "").slice(0, 8).toUpperCase() || "—"; }
@@ -67,6 +68,17 @@ export default function RiderDeliveriesScreen() {
         <Stop icon="storefront-outline" label="PICKUP" address={current.pickupAddress} onMap={() => openMap(current.pickupLatitude, current.pickupLongitude, current.pickupAddress)} />
         <View style={styles.routeLine} />
         <Stop icon="location-outline" label="DROP-OFF" address={current.dropoffAddress} onMap={() => openMap(current.dropoffLatitude, current.dropoffLongitude, current.dropoffAddress)} />
+        <RiderDeliveryMap
+          deliveryId={current.id}
+          pickupLatitude={current.pickupLatitude}
+          pickupLongitude={current.pickupLongitude}
+          pickupAddress={current.pickupAddress}
+          dropoffLatitude={current.dropoffLatitude}
+          dropoffLongitude={current.dropoffLongitude}
+          dropoffAddress={current.dropoffAddress}
+          status={current.status}
+          trackRider
+        />
         {["picked_up", "in_transit"].includes(current.status) && <View style={styles.locationBanner}><View style={[styles.liveDot, sharingDeliveryId === current.id && { backgroundColor: "#22C55E" }]} /><Text style={styles.locationText}>{sharingDeliveryId === current.id ? "Live foreground location sharing is active" : "Location permission is needed for live tracking"}</Text></View>}
         <View style={styles.actionGrid}>
           <Pressable style={styles.outlineButton} onPress={() => router.push(`/order/${current.orderId}` as any)}><Ionicons name="receipt-outline" size={18} color={Colors.primary} /><Text style={styles.outlineText}>Job details</Text></Pressable>

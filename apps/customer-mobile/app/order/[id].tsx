@@ -1,13 +1,15 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, Linking,
+  View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { safeBack } from "@/lib/navigation";
+import { CustomerDeliveryMap } from "@/components/CustomerDeliveryMap";
 
 const STATUS_STEPS = [
   { key: "pending", label: "Order Placed", icon: "checkmark-circle", desc: "We've received your order" },
@@ -49,13 +51,28 @@ export default function OrderDetailScreen() {
   const insets = useSafeAreaInsets();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
 
-  const { data: tracking, isLoading, error } = useQuery<any>({
+  const [cachedTracking, setCachedTracking] = useState<any>(null);
+  const { data: liveTracking, isLoading, error } = useQuery<any>({
     queryKey: ["/api/orders", id, "tracking"],
-    refetchInterval: 10000,
+    refetchInterval: 5000,
   });
+  const tracking = liveTracking || cachedTracking;
   const order = tracking?.order;
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!id) return;
+    AsyncStorage.getItem(`mansamart:order-tracking:${id}`).then((value) => {
+      if (value) setCachedTracking(JSON.parse(value));
+    }).catch(() => {});
+  }, [id]);
+
+  useEffect(() => {
+    if (!id || !liveTracking) return;
+    setCachedTracking(liveTracking);
+    AsyncStorage.setItem(`mansamart:order-tracking:${id}`, JSON.stringify(liveTracking)).catch(() => {});
+  }, [id, liveTracking]);
+
+  if (isLoading && !tracking) {
     return (
       <View style={styles.center}>
         <Stack.Screen options={{ headerShown: false }} />
@@ -65,7 +82,7 @@ export default function OrderDetailScreen() {
     );
   }
 
-  if (error || !order) {
+  if ((error && !tracking) || !order) {
     return (
       <View style={styles.center}>
         <Stack.Screen options={{ headerShown: false }} />
@@ -80,11 +97,6 @@ export default function OrderDetailScreen() {
 
   const currentIdx = order.status === "cancelled" ? -1 : STATUS_ORDER.indexOf(order.status);
   const statusColor = STATUS_COLORS[order.status] || Colors.primary;
-  const openMap = (lat?: number | null, lng?: number | null, fallback?: string) => {
-    const query = lat != null && lng != null ? `${lat},${lng}` : fallback;
-    if (!query) return;
-    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`);
-  };
 
   return (
     <View style={{ flex: 1, backgroundColor: "#F7F8FA" }}>
@@ -104,6 +116,12 @@ export default function OrderDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {(error || !liveTracking) && cachedTracking && (
+          <View style={styles.offlineSnapshot}>
+            <Ionicons name="cloud-offline-outline" size={18} color="#92400E" />
+            <Text style={styles.offlineSnapshotText}>Poor connection: showing the last saved tracking information.</Text>
+          </View>
+        )}
         {/* Tracking */}
         {order.status !== "cancelled" && (
           <View style={styles.card}>
@@ -228,16 +246,14 @@ export default function OrderDetailScreen() {
               <Ionicons name="home-outline" size={16} color="#666" />
               <Text style={styles.infoText}>Drop-off: {tracking.delivery.dropoffAddress || `${order.address}, ${order.city}`}</Text>
             </View>
-            <View style={styles.mapActions}>
-              <Pressable style={styles.mapBtn} onPress={() => openMap(tracking.delivery.pickupLatitude, tracking.delivery.pickupLongitude, tracking.delivery.pickupAddress)}>
-                <Ionicons name="navigate-outline" size={16} color={Colors.primary} />
-                <Text style={styles.mapText}>Vendor Map</Text>
-              </Pressable>
-              <Pressable style={styles.mapBtn} onPress={() => openMap(tracking.delivery.dropoffLatitude, tracking.delivery.dropoffLongitude, tracking.delivery.dropoffAddress || `${order.address}, ${order.city}`)}>
-                <Ionicons name="location-outline" size={16} color={Colors.primary} />
-                <Text style={styles.mapText}>Shopper Map</Text>
-              </Pressable>
-            </View>
+            <CustomerDeliveryMap
+              pickupLatitude={tracking.delivery.pickupLatitude}
+              pickupLongitude={tracking.delivery.pickupLongitude}
+              dropoffLatitude={tracking.delivery.dropoffLatitude}
+              dropoffLongitude={tracking.delivery.dropoffLongitude}
+              riderLocation={tracking.riderLocation}
+              status={tracking.delivery.status || order.status}
+            />
           </View>
         )}
 
@@ -342,7 +358,6 @@ const styles = StyleSheet.create({
   backBtnText: { color: "#fff", fontWeight: "700" },
   actionBtn: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#F7F8FA", borderRadius: 12, padding: 14 },
   actionBtnText: { fontSize: 14, fontWeight: "600", color: Colors.primary },
-  mapActions: { flexDirection: "row", gap: 10, marginTop: 12 },
-  mapBtn: { flex: 1, flexDirection: "row", gap: 6, justifyContent: "center", alignItems: "center", backgroundColor: Colors.primaryLight, borderRadius: 12, padding: 12 },
-  mapText: { color: Colors.primary, fontWeight: "700", fontSize: 13 },
+  offlineSnapshot: { flexDirection: "row", alignItems: "center", gap: 9, backgroundColor: "#FFFBEB", borderColor: "#FDE68A", borderWidth: 1, borderRadius: 12, padding: 11 },
+  offlineSnapshotText: { flex: 1, color: "#92400E", fontSize: 12, lineHeight: 17, fontWeight: "600" },
 });

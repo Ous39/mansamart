@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { safeBack } from "@/lib/navigation";
+import { RiderDeliveryMap } from "@/components/RiderDeliveryMap";
 
 const STATUS_STEPS = [
   { key: "pending", label: "Order placed", icon: "checkmark-circle", desc: "Customer created the order" },
@@ -218,6 +219,17 @@ export default function OrderDetailScreen() {
               <Ionicons name="home-outline" size={16} color="#666" />
               <Text style={styles.infoText}>Drop-off: {tracking.delivery.dropoffAddress || `${order.address}, ${order.city}`}</Text>
             </View>
+            <RiderDeliveryMap
+              deliveryId={tracking.delivery.id}
+              pickupLatitude={tracking.delivery.pickupLatitude}
+              pickupLongitude={tracking.delivery.pickupLongitude}
+              pickupAddress={tracking.delivery.pickupAddress}
+              dropoffLatitude={tracking.delivery.dropoffLatitude}
+              dropoffLongitude={tracking.delivery.dropoffLongitude}
+              dropoffAddress={tracking.delivery.dropoffAddress || `${order.address}, ${order.city}`}
+              status={tracking.delivery.status || order.status}
+              trackRider={false}
+            />
             <View style={styles.mapActions}>
               <Pressable style={styles.mapBtn} onPress={() => openMap(tracking.delivery.pickupLatitude, tracking.delivery.pickupLongitude, tracking.delivery.pickupAddress)}>
                 <Ionicons name="navigate-outline" size={16} color={Colors.primary} />

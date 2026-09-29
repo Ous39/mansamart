@@ -7,7 +7,8 @@ import { apiRequest, queryClient } from "@/lib/query-client";
 import { safeBack } from "@/lib/navigation";
 
 export default function ScanOrderScreen() {
-  const { stage, orderId } = useLocalSearchParams<{ stage?: "pickup" | "delivery"; orderId?: string }>();
+  const { stage, purpose, orderId } = useLocalSearchParams<{ stage?: "pickup" | "delivery"; purpose?: "pickup" | "delivery"; orderId?: string }>();
+  const handover = stage || purpose;
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -42,7 +43,7 @@ export default function ScanOrderScreen() {
         <Pressable onPress={() => safeBack("/")} hitSlop={8} style={styles.iconBtn}>
           <Ionicons name="arrow-back" size={23} color={Colors.text} />
         </Pressable>
-        <Text style={styles.title}>{stage === "pickup" ? "Verify Pickup" : stage === "delivery" ? "Verify Delivery" : "Verify Handover"}</Text>
+        <Text style={styles.title}>{handover === "pickup" ? "Verify Pickup" : handover === "delivery" ? "Verify Delivery" : "Verify Handover"}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -50,8 +51,8 @@ export default function ScanOrderScreen() {
         <View style={styles.scanCircle}>
           <Ionicons name="scan-outline" size={54} color={Colors.primary} />
         </View>
-        <Text style={styles.heroTitle}>{stage === "pickup" ? "Vendor handover" : stage === "delivery" ? "Customer handover" : "One-time QR verification"}</Text>
-        <Text style={styles.heroText}>{stage === "pickup" ? "Enter the pickup code shown by the seller. Only the assigned rider can use it." : stage === "delivery" ? "Ask the customer for their delivery code after handing over the order. This releases the delivery payment." : "Enter the one-time code shown by the correct handover party. The code cannot be reused."}</Text>
+        <Text style={styles.heroTitle}>{handover === "pickup" ? "Vendor handover" : handover === "delivery" ? "Customer handover" : "One-time QR verification"}</Text>
+        <Text style={styles.heroText}>{handover === "pickup" ? "Enter the pickup code shown by the seller. Only the assigned rider can use it." : handover === "delivery" ? "Ask the customer for their delivery code after handing over the order. This releases the delivery payment." : "Enter the one-time code shown by the correct handover party. The code cannot be reused."}</Text>
       </View>
 
       <View style={styles.card}>

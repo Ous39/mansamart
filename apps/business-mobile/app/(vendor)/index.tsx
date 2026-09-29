@@ -153,6 +153,7 @@ export default function VendorDashboard() {
           { label: "My Products", icon: "cube-outline", route: "/(vendor)/products", color: Colors.primary },
           { label: "Orders", icon: "receipt-outline", route: "/(vendor)/orders", color: "#2563EB" },
           { label: "Add Product", icon: "add-circle-outline", route: "/(vendor)/add-product", color: Colors.accent },
+          { label: "WhatsApp Sales", icon: "logo-whatsapp", route: "/(vendor)/whatsapp", color: "#18A66A" },
           { label: "Vendor Tools", icon: "megaphone-outline", route: "/(vendor)/tools", color: "#7B4FA3" },
           { label: "Finance & Payouts", icon: "wallet-outline", route: "/wallet", color: Colors.success },
           { label: "Returns & Refunds", icon: "return-down-back-outline", route: "/business-returns", color: "#B45309" },
