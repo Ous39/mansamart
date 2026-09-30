@@ -5,8 +5,9 @@ import {
   StyleSheet,
   Pressable,
   Image,
-  Dimensions,
+  useWindowDimensions,
 } from "react-native";
+import { getResponsiveCardWidth, getResponsiveLayout } from "@mansamart/design-system";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -16,9 +17,6 @@ import { Product } from "@/data/products";
 import { useWishlist } from "@/contexts/WishlistContext";
 import { useCart } from "@/contexts/CartContext";
 import { getProductImages, getProductMainImage } from "@/lib/product-media";
-
-const { width } = Dimensions.get("window");
-const CARD_WIDTH = (width - 48) / 2;
 
 interface ProductCardProps {
   onPress?: () => void;
@@ -31,6 +29,9 @@ function formatPrice(price: number) {
 }
 
 export function ProductCard({ product, style, onPress: onPressProp }: ProductCardProps) {
+  const { width } = useWindowDimensions();
+  const layout = getResponsiveLayout(width);
+  const cardWidth = getResponsiveCardWidth(width, layout.columns, 12);
   const { isWishlisted, toggle } = useWishlist();
   const { addToCart } = useCart();
   const scale = useSharedValue(1);
@@ -77,7 +78,7 @@ export function ProductCard({ product, style, onPress: onPressProp }: ProductCar
   return (
     <Pressable
       onPress={handlePress}
-      style={({ pressed }) => [styles.card, style, pressed && { opacity: 0.94 }]}
+      style={({ pressed }) => [styles.card, { width: cardWidth }, style, pressed && { opacity: 0.94 }]}
     >
       <View style={styles.imageContainer}>
         {mainImage ? (
@@ -168,7 +169,6 @@ export function ProductCard({ product, style, onPress: onPressProp }: ProductCar
 
 const styles = StyleSheet.create({
   card: {
-    width: CARD_WIDTH,
     backgroundColor: Colors.surface,
     borderRadius: 12,
     overflow: "hidden",
@@ -180,7 +180,7 @@ const styles = StyleSheet.create({
   },
   imageContainer: {
     width: "100%",
-    height: CARD_WIDTH * 1.1,
+    aspectRatio: 0.91,
     backgroundColor: Colors.borderLight,
     position: "relative",
   },

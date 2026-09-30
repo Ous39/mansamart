@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Image, Platform, ActivityIndicator, KeyboardAvoidingView, Alert, Switch } from "react-native";
+import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Image, Platform, ActivityIndicator, KeyboardAvoidingView, Alert, Switch, useWindowDimensions } from "react-native";
 import { router, useLocalSearchParams, Stack } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -31,6 +31,8 @@ function Field({ label, value, onChangeText, placeholder, keyboardType, multilin
 }
 
 export default function EditProductScreen() {
+  const { width } = useWindowDimensions();
+  const compact = width < 480;
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
@@ -189,7 +191,7 @@ export default function EditProductScreen() {
           </Pressable>
         </View>
 
-        <ScrollView contentContainerStyle={styles.form} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.form, compact && styles.formCompact]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <View style={styles.shopLockCard}>
             <View style={[styles.shopIcon, { backgroundColor: activeConfig.color + "20" }]}><Ionicons name={activeConfig.icon as any} size={22} color={activeConfig.color} /></View>
             <View style={{ flex: 1 }}><Text style={styles.shopLockTitle}>{activeConfig.name}</Text><Text style={styles.shopLockText}>Editing uses the same shop-category rules as add product.</Text></View>
@@ -225,7 +227,7 @@ export default function EditProductScreen() {
             <Text style={styles.sectionTitle}>Basic Details</Text>
             <Field label="Product Name *" value={name} onChangeText={setName} placeholder={activeConfig.productNamePlaceholder} />
             <LockedInfo icon="storefront-outline" label="Shop Name" value={profile?.storeName || brand || "Your shop profile name"} note="Locked from Vendor Profile so products stay under the correct shop." />
-            <View style={styles.twoCols}><View style={{ flex: 1 }}><Field label="Price (D) *" value={price} onChangeText={setPrice} placeholder="2500" keyboardType="numeric" /></View><View style={{ flex: 1 }}><Field label="Stock" value={stock} onChangeText={setStock} placeholder="10" keyboardType="numeric" /></View></View>
+            <View style={[styles.twoCols, compact && styles.oneCol]}><View style={{ flex: 1 }}><Field label="Price (D) *" value={price} onChangeText={setPrice} placeholder="2500" keyboardType="numeric" /></View><View style={{ flex: 1 }}><Field label="Stock" value={stock} onChangeText={setStock} placeholder="10" keyboardType="numeric" /></View></View>
             <Field label="Original Price (D)" value={originalPrice} onChangeText={setOriginalPrice} placeholder="Optional" keyboardType="numeric" />
             <Field label="Description" value={description} onChangeText={setDescription} placeholder={activeConfig.descriptionPlaceholder} multiline />
           </View>
@@ -279,7 +281,8 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.textMuted, marginTop: 2 },
   saveHeaderBtn: { backgroundColor: Colors.primary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, minWidth: 60, alignItems: "center" },
   saveHeaderBtnText: { color: "#fff", fontFamily: "Inter_700Bold", fontSize: 14 },
-  form: { padding: 16, gap: 14, paddingBottom: 44 },
+  form: { width: "100%", maxWidth: 900, alignSelf: "center", padding: 16, gap: 14, paddingBottom: 44 },
+  formCompact: { paddingHorizontal: 10 },
   shopLockCard: { flexDirection: "row", gap: 12, backgroundColor: Colors.card, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: Colors.border },
   shopIcon: { width: 46, height: 46, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   shopLockTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.text },
@@ -312,6 +315,7 @@ const styles = StyleSheet.create({
   urlRow: { flexDirection: "row", gap: 8, alignItems: "center" },
   addUrlBtn: { width: 48, height: 48, borderRadius: 14, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
   twoCols: { flexDirection: "row", gap: 10 },
+  oneCol: { flexDirection: "column" },
   catGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   catOption: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 999, backgroundColor: Colors.borderLight, borderWidth: 1, borderColor: Colors.border },
   catOptionText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.text },

@@ -21,7 +21,7 @@ Administrator credentials are deliberately rejected by the general web and mobil
 - `@mansamart/shared-types` — cross-application TypeScript contracts
 - `@mansamart/api-client` — browser API client and application identity headers
 - `@mansamart/authentication` — role routing and session storage helpers
-- `@mansamart/design-system` — common brand tokens
+- `@mansamart/design-system` — common brand tokens and responsive layout rules
 - `@mansamart/validation` — shared validation schemas
 - `@mansamart/business-logic` — marketplace calculations and rules
 
@@ -147,6 +147,12 @@ pnpm audit --prod --audit-level critical
 On Windows, double-click `audit-all.bat` to install the locked dependency graph and run type-checking, tests, lint, builds, and the critical-vulnerability gate in order. GitHub Actions runs the same checks for pull requests and the protected development branches.
 
 The complete audit currently reports two high-severity denial-of-service advisories in Expo Metro's transitive `image-size` build dependency. Forcing the patched `image-size` 2.0.3 release breaks Expo Router asset compilation, so it is not overridden. This package runs in the development/build toolchain rather than the API runtime; keep repository asset changes reviewed and upgrade Expo/Metro when it adopts the compatible patched release.
+
+## Responsive device support
+
+All five user interfaces are designed to reflow from compact 280–360 px phones through standard phones, tablets, landscape orientation, laptops, desktops, and wide displays. The three Expo applications use shared live-width breakpoints rather than a one-time screen measurement, allow device rotation, center their content on large browser previews, and change product/service grids between one and four columns. Forms, dashboard metrics, action rows, delivery maps, and navigation controls wrap instead of overflowing.
+
+The marketplace and administrator websites add compact-phone layouts, horizontally scrollable data tables, dynamic-height dialogs, safe map sizing, wide-screen content caps, landscape handling, and reduced-motion support. Automated responsive-rule tests cover representative widths of 280, 390, 768, 1024, and 1920 pixels. Before each store release, still verify the native builds on at least one small Android phone, one modern iPhone, one Android tablet, and one iPad because operating-system font scaling and safe areas cannot be fully reproduced by browser exports.
 
 ## Customer mobile milestone
 

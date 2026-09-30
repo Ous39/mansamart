@@ -41,7 +41,7 @@ export default function ProviderDashboard() {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={{ paddingBottom: 40 + (Platform.OS === "web" ? 34 : 0) }}
+      contentContainerStyle={[styles.pageContent, { paddingBottom: 40 + (Platform.OS === "web" ? 34 : 0) }]}
       showsVerticalScrollIndicator={false}
     >
       <LinearGradient colors={["#5B2D8A", "#7B4FA3"]} style={[styles.headerBg, { paddingTop: topPad + 20 }]}>
@@ -148,6 +148,7 @@ export default function ProviderDashboard() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  pageContent: { width: "100%", maxWidth: 1200, alignSelf: "center" },
   headerBg: { paddingHorizontal: 20, paddingBottom: 32 },
   headerRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 },
   headerLabel: { fontSize: 12, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: 1 },
@@ -166,7 +167,7 @@ const styles = StyleSheet.create({
   verificationText: { fontFamily: "Inter_400Regular", color: "#A16207", fontSize: 11, lineHeight: 16, marginTop: 2 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, padding: 20, marginTop: -16 },
   statCard: {
-    flex: 1, minWidth: "44%", borderRadius: 16, padding: 16, gap: 6,
+    flexGrow: 1, flexBasis: 200, minWidth: 140, borderRadius: 16, padding: 16, gap: 6,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
   },
   statIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 4 },

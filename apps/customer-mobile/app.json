@@ -3,7 +3,7 @@
     "name": "MansaMart",
     "slug": "mansamart-customer",
     "version": "2.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "mansamart",
     "userInterfaceStyle": "light",

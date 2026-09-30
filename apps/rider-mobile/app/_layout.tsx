@@ -16,6 +16,7 @@ import { queryClient } from "@/lib/query-client";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
 import { subscribeToNotificationNavigation } from "@/lib/push-registration";
+import { ResponsiveAppFrame } from "@/components/ResponsiveAppFrame";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -67,7 +68,7 @@ export default function RootLayout() {
           <KeyboardProvider>
             <AuthProvider>
               <NotificationProvider>
-                <RootLayoutNav />
+                <ResponsiveAppFrame><RootLayoutNav /></ResponsiveAppFrame>
               </NotificationProvider>
             </AuthProvider>
           </KeyboardProvider>

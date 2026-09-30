@@ -7,7 +7,9 @@ import {
   FlatList,
   Platform,
   TextInput,
+  useWindowDimensions,
 } from "react-native";
+import { getResponsiveCardWidth, getResponsiveLayout } from "@mansamart/design-system";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
@@ -24,6 +26,10 @@ const sortOptions = [
 ];
 
 export default function BrowseScreen() {
+  const { width } = useWindowDimensions();
+  const responsive = getResponsiveLayout(width);
+  const columns = responsive.columns;
+  const cardWidth = getResponsiveCardWidth(width, columns, 10);
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedSort, setSelectedSort] = useState("popular");
@@ -171,16 +177,17 @@ export default function BrowseScreen() {
         </View>
       ) : (
         <FlatList
+          key={`products-${columns}`}
           data={filtered}
           keyExtractor={i => i.id}
-          numColumns={2}
+          numColumns={columns}
           contentContainerStyle={[
             styles.grid,
             { paddingBottom: 120 + (Platform.OS === "web" ? 34 : 0) },
           ]}
           columnWrapperStyle={styles.row}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item }) => <ProductCard product={item} />}
+          renderItem={({ item }) => <ProductCard product={item} style={{ width: cardWidth }} />}
         />
       )}
     </View>
@@ -214,7 +221,7 @@ const styles = StyleSheet.create({
   filterChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   filterChipText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.primary },
   filterChipTextActive: { color: "#fff" },
-  sortRow: { flexDirection: "row", gap: 7, flexWrap: "nowrap" },
+  sortRow: { flexDirection: "row", gap: 7, flexWrap: "wrap" },
   sortChip: {
     borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5,
     backgroundColor: Colors.borderLight, borderWidth: 1, borderColor: Colors.border,
@@ -222,7 +229,7 @@ const styles = StyleSheet.create({
   sortChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   sortText: { fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.textSecondary },
   sortTextActive: { color: "#fff", fontFamily: "Inter_600SemiBold" },
-  grid: { paddingHorizontal: 12, paddingTop: 12 },
+  grid: { width: "100%", maxWidth: 1224, alignSelf: "center", paddingHorizontal: 12, paddingTop: 12 },
   row: { gap: 10, marginBottom: 10 },
   emptyState: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, paddingTop: 60 },
   emptyIcon: { width: 80, height: 80, borderRadius: 24, backgroundColor: Colors.borderLight, alignItems: "center", justifyContent: "center" },

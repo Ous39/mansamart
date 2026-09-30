@@ -17,6 +17,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { BookingProvider } from "@/contexts/BookingContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
 import { subscribeToNotificationNavigation } from "@/lib/push-registration";
+import { ResponsiveAppFrame } from "@/components/ResponsiveAppFrame";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -74,7 +75,7 @@ export default function RootLayout() {
             <AuthProvider>
               <BookingProvider>
                 <NotificationProvider>
-                  <RootLayoutNav />
+                  <ResponsiveAppFrame><RootLayoutNav /></ResponsiveAppFrame>
                 </NotificationProvider>
               </BookingProvider>
             </AuthProvider>

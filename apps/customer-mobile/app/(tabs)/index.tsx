@@ -7,8 +7,9 @@ import {
   ScrollView,
   FlatList,
   Platform,
-  Dimensions,
+  useWindowDimensions,
 } from "react-native";
+import { getResponsiveCardWidth, getResponsiveLayout } from "@mansamart/design-system";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -19,8 +20,6 @@ import { products as localProducts, getSaleProducts } from "@/data/products";
 import { ProductCard } from "@/components/ProductCard";
 import { FixedHeader } from "@/components/FixedHeader";
 import { useAuth } from "@/contexts/AuthContext";
-
-const { width } = Dimensions.get("window");
 
 const BANNERS = [
   { id: "1", title: "MansaMart", subtitle: "Shop fashion, electronics, food & more", tag: "NEW SEASON", color1: "#0EA47A", color2: "#0B8A65", icon: "storefront-outline" },
@@ -57,19 +56,19 @@ function useSecs(initial: number) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-function BannerCarousel() {
+function BannerCarousel({ contentWidth }: { contentWidth: number }) {
   const [active, setActive] = useState(0);
   const ref = useRef<ScrollView>(null);
   useEffect(() => {
     const t = setInterval(() => {
       setActive(a => {
         const next = (a + 1) % BANNERS.length;
-        ref.current?.scrollTo({ x: next * (width - 32), animated: true });
+        ref.current?.scrollTo({ x: next * contentWidth, animated: true });
         return next;
       });
     }, 3500);
     return () => clearInterval(t);
-  }, []);
+  }, [contentWidth]);
   return (
     <View style={styles.bannerWrap}>
       <ScrollView
@@ -77,13 +76,13 @@ function BannerCarousel() {
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={e => setActive(Math.round(e.nativeEvent.contentOffset.x / (width - 32)))}
+        onMomentumScrollEnd={e => setActive(Math.round(e.nativeEvent.contentOffset.x / contentWidth))}
         scrollEventThrottle={16}
         decelerationRate="fast"
-        snapToInterval={width - 32}
+        snapToInterval={contentWidth}
       >
         {BANNERS.map(b => (
-          <LinearGradient key={b.id} colors={[b.color1, b.color2]} style={styles.banner} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+          <LinearGradient key={b.id} colors={[b.color1, b.color2]} style={[styles.banner, { width: contentWidth }]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
             <View style={styles.bannerLeft}>
               <View style={styles.bannerTag}>
                 <Text style={styles.bannerTagText}>{b.tag}</Text>
@@ -111,6 +110,13 @@ function BannerCarousel() {
 }
 
 export default function HomeScreen() {
+  const { width } = useWindowDimensions();
+  const responsive = getResponsiveLayout(width);
+  const columns = responsive.columns;
+  const cardWidth = getResponsiveCardWidth(width, columns, 10);
+  const categoryColumns = width < 360 ? 4 : width < 700 ? 6 : width < 1024 ? 8 : 12;
+  const categoryWidth = (responsive.contentWidth - 4 * (categoryColumns - 1)) / categoryColumns;
+  const bannerWidth = Math.max(248, Math.min(width, 1224) - 32);
   const { user } = useAuth();
   const countdown = useSecs(2 * 3600 + 47 * 60 + 22);
 
@@ -133,6 +139,7 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingTop: 16, paddingBottom: 120 + (Platform.OS === "web" ? 34 : 0) }}
         showsVerticalScrollIndicator={false}
       >
+        <View style={styles.pageContent}>
         {/* Welcome bar */}
         {user && (
           <View style={styles.welcomeBar}>
@@ -146,7 +153,7 @@ export default function HomeScreen() {
         )}
 
         {/* Banner */}
-        <BannerCarousel />
+        <BannerCarousel contentWidth={bannerWidth} />
 
         {/* Category Grid */}
         <View style={styles.sectionHeader}>
@@ -159,7 +166,7 @@ export default function HomeScreen() {
           {CAT_GRID.map(cat => (
             <Pressable
               key={cat.id}
-              style={({ pressed }) => [styles.catItem, pressed && { opacity: 0.8 }]}
+              style={({ pressed }) => [styles.catItem, { width: categoryWidth }, pressed && { opacity: 0.8 }]}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 if (cat.id === "more") router.push("/(tabs)/services");
@@ -213,7 +220,7 @@ export default function HomeScreen() {
           </Pressable>
         </View>
         <View style={styles.grid}>
-          {featuredProducts.map(p => <ProductCard key={p.id} product={p} />)}
+          {featuredProducts.map(p => <ProductCard key={p.id} product={p} style={{ width: cardWidth }} />)}
         </View>
 
         {/* Best Sellers banner */}
@@ -247,7 +254,7 @@ export default function HomeScreen() {
           </Pressable>
         </View>
         <View style={styles.grid}>
-          {newProducts.map(p => <ProductCard key={p.id} product={p} />)}
+          {newProducts.map(p => <ProductCard key={p.id} product={p} style={{ width: cardWidth }} />)}
         </View>
 
         {/* Recommended for You */}
@@ -264,7 +271,7 @@ export default function HomeScreen() {
             </View>
             <View style={styles.grid}>
               {(recommendations as any[]).slice(0, 8).map((p: any) => (
-                <ProductCard key={p.id} product={p} onPress={() => router.push(`/product/${p.id}`)} />
+                <ProductCard key={p.id} product={p} style={{ width: cardWidth }} onPress={() => router.push(`/product/${p.id}`)} />
               ))}
             </View>
           </>
@@ -295,6 +302,7 @@ export default function HomeScreen() {
             ))}
           </View>
         </Pressable>
+        </View>
       </ScrollView>
     </View>
   );
@@ -302,13 +310,14 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  pageContent: { width: "100%", maxWidth: 1224, alignSelf: "center" },
   welcomeBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, marginBottom: 14 },
   welcomeText: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.textSecondary },
   welcomeName: { fontFamily: "Inter_700Bold", color: Colors.text },
   avatarSmall: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   avatarSmallText: { fontSize: 13, fontFamily: "Inter_700Bold", color: "#fff" },
   bannerWrap: { marginHorizontal: 16, marginBottom: 20 },
-  banner: { width: width - 32, borderRadius: 16, padding: 20, flexDirection: "row", alignItems: "center", overflow: "hidden" },
+  banner: { borderRadius: 16, padding: 20, flexDirection: "row", alignItems: "center", overflow: "hidden" },
   bannerLeft: { flex: 1, gap: 7 },
   bannerTag: { alignSelf: "flex-start", backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   bannerTagText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 1 },
@@ -328,7 +337,7 @@ const styles = StyleSheet.create({
   newBadgeInline: { backgroundColor: Colors.deal, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 },
   newBadgeInlineText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.5 },
   catGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 12, gap: 4, marginBottom: 20 },
-  catItem: { width: (width - 24 - 4 * 5) / 6, alignItems: "center", gap: 5, padding: 4 },
+  catItem: { alignItems: "center", gap: 5, padding: 4 },
   catIcon: { width: 48, height: 48, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   catLabel: { fontSize: 9, fontFamily: "Inter_500Medium", color: Colors.textSecondary, textAlign: "center" },
   flashSection: { backgroundColor: "#0F172A", paddingVertical: 16, marginBottom: 0 },

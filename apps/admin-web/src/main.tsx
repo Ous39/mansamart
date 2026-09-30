@@ -4,6 +4,7 @@ import { MansaMartApi } from "@mansamart/api-client";
 import { createTokenStore } from "@mansamart/authentication";
 import type { SessionUser } from "@mansamart/shared-types";
 import "./styles.css";
+import "./responsive.css";
 
 const store = createTokenStore("mansamart_admin_session");
 const api = new MansaMartApi(import.meta.env.VITE_API_URL || "http://127.0.0.1:5000", "admin", store.get);

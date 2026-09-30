@@ -6,7 +6,7 @@ import {
   Pressable,
   ScrollView,
   Image,
-  Dimensions,
+  useWindowDimensions,
   Platform,
   TextInput,
   Modal,
@@ -23,8 +23,6 @@ import { serviceCategories } from "@/data/services";
 import { useBookings } from "@/contexts/BookingContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
-
-const { width } = Dimensions.get("window");
 
 const TIMES = ["9:00 AM", "10:00 AM", "11:00 AM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM"];
 
@@ -44,6 +42,9 @@ function getNextDays(count: number) {
 }
 
 export default function ServiceDetailScreen() {
+  const { width } = useWindowDimensions();
+  const compact = width < 360;
+  const imageHeight = Math.min(560, Math.max(240, width * 0.7));
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const { addBooking } = useBookings();
@@ -116,8 +117,8 @@ export default function ServiceDetailScreen() {
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 110 + insets.bottom }} showsVerticalScrollIndicator={false}>
-        <View style={styles.imgWrap}>
+      <ScrollView contentContainerStyle={[styles.detailContent, { paddingBottom: 110 + insets.bottom }]} showsVerticalScrollIndicator={false}>
+        <View style={[styles.imgWrap, { height: imageHeight }]}>
           {service.imageUrl ? (
             <Image source={{ uri: service.imageUrl }} style={styles.img} resizeMode="cover" />
           ) : (
@@ -264,7 +265,7 @@ export default function ServiceDetailScreen() {
         </View>
       </ScrollView>
 
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 12 }]}>
+      <View style={[styles.bottomBar, compact && styles.bottomBarCompact, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 12 }]}>
         <View style={styles.priceSummary}>
           <Text style={styles.totalLabel}>Total</Text>
           <Text style={styles.totalPrice}>D {service.price}{priceLabel}</Text>
@@ -313,7 +314,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   notFound: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   notFoundText: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.text },
-  imgWrap: { width: "100%", height: width * 0.7, backgroundColor: Colors.borderLight, position: "relative" },
+  detailContent: { width: "100%", maxWidth: 900, alignSelf: "center" },
+  imgWrap: { width: "100%", backgroundColor: Colors.borderLight, position: "relative" },
   img: { width: "100%", height: "100%" },
   topBar: {
     position: "absolute", left: 0, right: 0,
@@ -382,10 +384,12 @@ const styles = StyleSheet.create({
   },
   addressInput: { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.text },
   bottomBar: {
+    width: "100%", maxWidth: 900, alignSelf: "center",
     flexDirection: "row", alignItems: "center", gap: 12,
     paddingHorizontal: 20, paddingTop: 16,
     backgroundColor: Colors.surface, borderTopWidth: 1, borderTopColor: Colors.borderLight,
   },
+  bottomBarCompact: { flexWrap: "wrap", paddingHorizontal: 10 },
   priceSummary: { gap: 2 },
   totalLabel: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.textMuted },
   totalPrice: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.text },
@@ -396,7 +400,7 @@ const styles = StyleSheet.create({
   bookBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", padding: 24 },
   modalCard: {
-    width: "100%", backgroundColor: "#fff", borderRadius: 24, padding: 28,
+    width: "100%", maxWidth: 520, backgroundColor: "#fff", borderRadius: 24, padding: 28,
     alignItems: "center", gap: 14,
     shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 24, elevation: 10,
   },

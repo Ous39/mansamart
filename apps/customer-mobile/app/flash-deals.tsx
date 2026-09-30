@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator,
-  Platform, Dimensions,
+  Platform, useWindowDimensions,
 } from "react-native";
+import { getResponsiveCardWidth, getResponsiveLayout } from "@mansamart/design-system";
 import { router, Stack } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { ProductCard } from "@/components/ProductCard";
-
-const { width } = Dimensions.get("window");
 
 function useCountdown(endTime: string | null) {
   const [remaining, setRemaining] = useState("");
@@ -32,6 +31,10 @@ function useCountdown(endTime: string | null) {
 }
 
 export default function FlashDealsScreen() {
+  const { width } = useWindowDimensions();
+  const responsive = getResponsiveLayout(width);
+  const columns = responsive.columns;
+  const cardWidth = getResponsiveCardWidth(width, columns, 8);
   const insets = useSafeAreaInsets();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
 
@@ -82,9 +85,10 @@ export default function FlashDealsScreen() {
         </View>
       ) : (
         <FlatList
+          key={`deals-${columns}`}
           data={deals}
           keyExtractor={(item) => item.id}
-          numColumns={2}
+          numColumns={columns}
           contentContainerStyle={styles.grid}
           columnWrapperStyle={styles.row}
           renderItem={({ item }) => (
@@ -101,7 +105,7 @@ export default function FlashDealsScreen() {
                     isSale: true,
                   }}
                   onPress={() => router.push(`/product/${item.product.id}`)}
-                  style={{ width: (width - 36) / 2 }}
+                  style={{ width: cardWidth }}
                 />
               )}
               {/* Stock bar */}
@@ -139,7 +143,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: "#FFD0D0",
   },
   bannerText: { color: "#E63946", fontSize: 13, fontWeight: "600", flex: 1 },
-  grid: { padding: 10, paddingBottom: 30 },
+  grid: { width: "100%", maxWidth: 1220, alignSelf: "center", padding: 10, paddingBottom: 30 },
   row: { gap: 8, justifyContent: "space-between" },
   dealWrapper: { marginBottom: 12, position: "relative" },
   discountBadge: {

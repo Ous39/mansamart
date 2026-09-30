@@ -7,7 +7,7 @@ import {
   ScrollView,
   Image,
   FlatList,
-  Dimensions,
+  useWindowDimensions,
   Platform,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -24,9 +24,6 @@ import { ReviewsSection } from "@/components/ReviewsSection";
 import { ProductCard } from "@/components/ProductCard";
 import { apiRequest } from "@/lib/query-client";
 import { getProductImages } from "@/lib/product-media";
-
-const { width } = Dimensions.get("window");
-const IMG_HEIGHT = width * 0.92;
 
 function formatPrice(value: unknown) {
   return `D ${Number(value ?? 0).toLocaleString()}`;
@@ -52,6 +49,9 @@ function ProductPill({ icon, label }: { icon: keyof typeof Ionicons.glyphMap; la
 }
 
 export default function ProductDetailScreen() {
+  const { width } = useWindowDimensions();
+  const compact = width < 360;
+  const imageHeight = Math.min(620, Math.max(280, width * 0.92));
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const { addToCart } = useCart();
@@ -155,8 +155,8 @@ export default function ProductDetailScreen() {
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 142 + insets.bottom }} showsVerticalScrollIndicator={false}>
-        <View style={styles.imageWrap}>
+      <ScrollView contentContainerStyle={[styles.detailContent, { paddingBottom: 142 + insets.bottom }]} showsVerticalScrollIndicator={false}>
+        <View style={[styles.imageWrap, { height: imageHeight }]}>
           {mainImage ? (
             <Image source={mainImage} style={styles.productImage} resizeMode="cover" />
           ) : (
@@ -356,7 +356,7 @@ export default function ProductDetailScreen() {
         </View>
       </ScrollView>
 
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 12 }]}>
+      <View style={[styles.bottomBar, compact && styles.bottomBarCompact, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 12 }]}>
         <View style={styles.qtyControl}>
           <Pressable onPress={() => setQty(q => Math.max(1, q - 1))} style={styles.qtyBtn} hitSlop={8} disabled={!inStock}>
             <Ionicons name="remove" size={18} color={Colors.text} />
@@ -391,7 +391,8 @@ const styles = StyleSheet.create({
   notFoundText: { fontSize: 18, fontFamily: "Inter_600SemiBold", color: Colors.text },
   backHomeBtn: { backgroundColor: Colors.primary, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12 },
   backHomeText: { color: "#fff", fontFamily: "Inter_700Bold" },
-  imageWrap: { width: "100%", height: IMG_HEIGHT, backgroundColor: Colors.borderLight, position: "relative" },
+  detailContent: { width: "100%", maxWidth: 900, alignSelf: "center" },
+  imageWrap: { width: "100%", backgroundColor: Colors.borderLight, position: "relative" },
   productImage: { width: "100%", height: "100%" },
   placeholder: { alignItems: "center", justifyContent: "center" },
   placeholderText: { color: "rgba(255,255,255,0.85)", fontFamily: "Inter_600SemiBold", marginTop: 8 },
@@ -455,7 +456,8 @@ const styles = StyleSheet.create({
   vendorSub: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.textMuted, marginTop: 2 },
   vendorBtn: { backgroundColor: Colors.primary, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 8 },
   vendorBtnText: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff" },
-  bottomBar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingTop: 14, backgroundColor: Colors.surface, borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  bottomBar: { width: "100%", maxWidth: 900, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingTop: 14, backgroundColor: Colors.surface, borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  bottomBarCompact: { flexWrap: "wrap", paddingHorizontal: 10 },
   qtyControl: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.borderLight, borderRadius: 14, overflow: "hidden" },
   qtyBtn: { width: 38, height: 48, alignItems: "center", justifyContent: "center" },
   qtyText: { width: 34, textAlign: "center", fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.text },

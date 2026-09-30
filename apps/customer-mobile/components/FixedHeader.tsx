@@ -7,6 +7,7 @@ import {
   TextInput,
   ScrollView,
   Platform,
+  useWindowDimensions,
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -41,6 +42,8 @@ export function FixedHeader({
   searchPlaceholder = "Search MansaMart...",
 }: FixedHeaderProps) {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const compact = width < 360;
   const { totalItems } = useCart();
   const { unreadCount } = useNotifications();
   const [locationIdx, setLocationIdx] = useState(0);
@@ -54,15 +57,15 @@ export function FixedHeader({
   return (
     <View style={[styles.container, { paddingTop: topPad + 10 }]}>
       {/* Logo + Actions Row */}
-      <View style={styles.logoRow}>
+      <View style={[styles.logoRow, compact && styles.compactHorizontal]}>
         <View style={styles.logoWrap}>
           <View style={styles.logoDot} />
-          <Text style={styles.logoText}>MansaMart</Text>
+          <Text style={[styles.logoText, compact && styles.compactLogo]}>MansaMart</Text>
         </View>
 
         <Pressable style={styles.locationBtn} onPress={cycleLocation}>
           <Ionicons name="location-sharp" size={13} color={Colors.deal} />
-          <Text style={styles.locationText}>{LOCATIONS[locationIdx]}</Text>
+          {!compact && <Text style={styles.locationText}>{LOCATIONS[locationIdx]}</Text>}
           <Ionicons name="chevron-down" size={11} color={Colors.textMuted} />
         </Pressable>
 
@@ -88,7 +91,7 @@ export function FixedHeader({
 
       {/* Search Bar */}
       {showSearch && (
-        <View style={styles.searchRow}>
+        <View style={[styles.searchRow, compact && styles.compactHorizontal]}>
           <View style={styles.searchWrap}>
             <Ionicons name="search-outline" size={17} color={Colors.textMuted} />
             {onSearchChange ? (
@@ -330,6 +333,8 @@ const styles = StyleSheet.create({
     gap: 6,
     backgroundColor: Colors.primaryLight,
     paddingVertical: 6,
+    paddingHorizontal: 8,
+    flexWrap: "wrap",
   },
   shippingText: {
     fontSize: 11,
@@ -344,4 +349,6 @@ const styles = StyleSheet.create({
     color: Colors.border,
     fontSize: 11,
   },
+  compactHorizontal: { paddingHorizontal: 10 },
+  compactLogo: { fontSize: 17 },
 });

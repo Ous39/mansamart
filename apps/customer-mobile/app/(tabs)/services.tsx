@@ -1,16 +1,14 @@
 import React, { useState, useMemo } from "react";
 import {
-  View, Text, StyleSheet, Pressable, FlatList, Platform, Dimensions, Image,
+  View, Text, StyleSheet, Pressable, FlatList, Platform, Image, useWindowDimensions,
 } from "react-native";
+import { getResponsiveCardWidth, getResponsiveLayout } from "@mansamart/design-system";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { services as localServices, serviceCategories } from "@/data/services";
 import { FixedHeader } from "@/components/FixedHeader";
-
-const { width } = Dimensions.get("window");
-const CARD_W = (width - 12 * 2 - 10) / 2;
 
 const SORT_OPTIONS = [
   { key: "popular", label: "Popular" },
@@ -33,13 +31,13 @@ function priceLabel(s: any) {
   return "";
 }
 
-function ServiceGridCard({ service }: { service: any }) {
+function ServiceGridCard({ service, cardWidth }: { service: any; cardWidth: number }) {
   const cat = serviceCategories.find(c => c.id === service.category);
   const pl = priceLabel(service);
 
   return (
     <Pressable
-      style={({ pressed }) => [styles.card, { width: CARD_W }, pressed && { opacity: 0.93 }]}
+      style={({ pressed }) => [styles.card, { width: cardWidth }, pressed && { opacity: 0.93 }]}
       onPress={() => router.push({ pathname: "/service/[id]", params: { id: service.id } })}
     >
       {/* Image */}
@@ -93,6 +91,10 @@ function ServiceGridCard({ service }: { service: any }) {
 }
 
 export default function ServicesScreen() {
+  const { width } = useWindowDimensions();
+  const responsive = getResponsiveLayout(width);
+  const columns = responsive.columns;
+  const cardWidth = getResponsiveCardWidth(width, columns, 10);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedSort, setSelectedSort] = useState("popular");
   const [selectedPriceType, setSelectedPriceType] = useState<string | null>(null);
@@ -130,6 +132,7 @@ export default function ServicesScreen() {
       {/* Category scroll */}
       <View style={styles.catScroll}>
         <FlatList
+          key={`services-${columns}`}
           data={[{ id: null, name: "All", icon: "apps-outline", color: Colors.primary, bgColor: Colors.primaryLight }, ...serviceCategories]}
           keyExtractor={c => c.id ?? "all"}
           horizontal
@@ -205,11 +208,11 @@ export default function ServicesScreen() {
         <FlatList
           data={filtered}
           keyExtractor={s => s.id}
-          numColumns={2}
+          numColumns={columns}
           columnWrapperStyle={styles.row}
           contentContainerStyle={[styles.grid, { paddingBottom: 120 + (Platform.OS === "web" ? 34 : 0) }]}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item }) => <ServiceGridCard service={item} />}
+          renderItem={({ item }) => <ServiceGridCard service={item} cardWidth={cardWidth} />}
         />
       )}
     </View>
@@ -241,7 +244,7 @@ const styles = StyleSheet.create({
   filterChipActive: { backgroundColor: Colors.primary },
   filterChipText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.primary },
   filterChipTextActive: { color: "#fff" },
-  sortRow: { flexDirection: "row", gap: 7 },
+  sortRow: { flexDirection: "row", gap: 7, flexWrap: "wrap" },
   sortChip: { borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: Colors.borderLight, borderWidth: 1, borderColor: Colors.border },
   sortChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   sortText: { fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.textSecondary },
@@ -249,10 +252,10 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 14, paddingTop: 12, paddingBottom: 4 },
   sectionTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.text },
   clearText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.primary },
-  grid: { paddingHorizontal: 12, paddingTop: 8 },
+  grid: { width: "100%", maxWidth: 1224, alignSelf: "center", paddingHorizontal: 12, paddingTop: 8 },
   row: { gap: 10, marginBottom: 10 },
   card: { backgroundColor: Colors.surface, borderRadius: 16, overflow: "hidden", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 8, elevation: 2 },
-  cardImg: { width: "100%", height: 130, backgroundColor: Colors.borderLight },
+  cardImg: { width: "100%", aspectRatio: 1.35, backgroundColor: Colors.borderLight },
   cardImgActual: { width: "100%", height: "100%" },
   cardBadges: { position: "absolute", top: 8, left: 8, right: 8, flexDirection: "row", justifyContent: "space-between" },
   catBadge: { borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3 },

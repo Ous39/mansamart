@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  ActivityIndicator, Platform, Dimensions, Linking, Image,
+  ActivityIndicator, Platform, Linking, Image, useWindowDimensions,
 } from "react-native";
+import { getResponsiveCardWidth, getResponsiveLayout } from "@mansamart/design-system";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -11,8 +12,6 @@ import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { ProductCard } from "@/components/ProductCard";
 import { toImageSource } from "@/lib/product-media";
-
-const { width } = Dimensions.get("window");
 
 function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
   return (
@@ -30,6 +29,9 @@ function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
 }
 
 export default function VendorStoreScreen() {
+  const { width } = useWindowDimensions();
+  const responsive = getResponsiveLayout(width);
+  const cardWidth = getResponsiveCardWidth(width, responsive.columns, 8);
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -66,7 +68,7 @@ export default function VendorStoreScreen() {
     <View style={{ flex: 1, backgroundColor: "#F7F8FA" }}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.pageContent}>
         {/* Cover + Back */}
         <View style={{ position: "relative" }}>
           <LinearGradient
@@ -162,7 +164,7 @@ export default function VendorStoreScreen() {
                     key={p.id}
                     product={p}
                     onPress={() => router.push(`/product/${p.id}`)}
-                    style={{ width: (width - 36) / 2 }}
+                    style={{ width: cardWidth }}
                   />
                 ))}
               </View>
@@ -235,6 +237,7 @@ function InfoRow({ icon, label, value }: any) {
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#F7F8FA" },
+  pageContent: { width: "100%", maxWidth: 1224, alignSelf: "center" },
   coverImage: { ...(StyleSheet.absoluteFillObject as any), width: "100%", height: "100%" },
   coverShade: { ...(StyleSheet.absoluteFillObject as any), backgroundColor: "rgba(0,0,0,0.34)" },
   storeLogoImage: { width: "100%", height: "100%", borderRadius: 41 },
