@@ -27,6 +27,26 @@ export type ResponsiveLayout = {
   isDesktop: boolean;
 };
 
+export type FoldOrientation = "vertical" | "horizontal";
+export type FoldPosture = "flat" | "book" | "tabletop";
+
+export type FoldFeature = {
+  orientation: FoldOrientation;
+  posture?: FoldPosture;
+  /** The obscured hinge/fold size reported by the platform, in logical pixels. */
+  size?: number;
+};
+
+export type AdaptiveDeviceLayout = ResponsiveLayout & {
+  orientation: "portrait" | "landscape";
+  presentation: "compact" | "single-pane" | "two-pane";
+  posture: FoldPosture;
+  foldOrientation: FoldOrientation | null;
+  hingeGap: number;
+  paneWidth: number;
+  isFoldable: boolean;
+};
+
 /** Pure responsive rules shared by the Expo apps and testable without a DOM. */
 export function getResponsiveLayout(viewportWidth: number, maxContentWidth = 1200): ResponsiveLayout {
   const width = Math.max(280, Number.isFinite(viewportWidth) ? viewportWidth : 280);
@@ -54,4 +74,40 @@ export function getResponsiveCardWidth(viewportWidth: number, columns?: number, 
   const layout = getResponsiveLayout(viewportWidth, maxContentWidth);
   const count = Math.max(1, Math.floor(columns ?? layout.columns));
   return Math.max(0, (layout.contentWidth - gap * (count - 1)) / count);
+}
+
+/**
+ * Creates a stable layout for phones, tablets and foldables. A real platform
+ * fold feature always wins; wide screens still receive a useful two-pane
+ * fallback so unfolded devices remain usable while native posture data loads.
+ */
+export function getAdaptiveDeviceLayout(
+  viewportWidth: number,
+  viewportHeight: number,
+  fold?: FoldFeature | null,
+  maxContentWidth = 1440,
+): AdaptiveDeviceLayout {
+  const base = getResponsiveLayout(viewportWidth, maxContentWidth);
+  const height = Math.max(280, Number.isFinite(viewportHeight) ? viewportHeight : 280);
+  const orientation = base.width > height ? "landscape" : "portrait";
+  const hasFold = Boolean(fold);
+  const foldOrientation = fold?.orientation ?? null;
+  const posture = fold?.posture ?? "flat";
+  const hingeGap = hasFold ? Math.max(16, Math.min(72, fold?.size ?? 24)) : 0;
+  const canSplit = base.contentWidth >= 700 && (!hasFold || foldOrientation === "vertical");
+  const presentation = base.width < 360 ? "compact" : canSplit ? "two-pane" : "single-pane";
+  const paneWidth = presentation === "two-pane"
+    ? Math.max(0, (base.contentWidth - hingeGap) / 2)
+    : base.contentWidth;
+
+  return {
+    ...base,
+    orientation,
+    presentation,
+    posture,
+    foldOrientation,
+    hingeGap,
+    paneWidth,
+    isFoldable: hasFold,
+  };
 }
