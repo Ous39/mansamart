@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import {
-  View, Text, StyleSheet, Pressable, FlatList, Platform, ActivityIndicator,
+  View, Text, StyleSheet, Pressable, FlatList, Platform, ActivityIndicator, ScrollView,
 } from "react-native";
 import { router, Stack } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -67,6 +67,7 @@ export default function NotificationsScreen() {
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
   const { isAuthenticated } = useAuth();
   const qc = useQueryClient();
+  const [filter, setFilter] = useState("all");
 
   const { data: notifications = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/notifications"],
@@ -88,6 +89,8 @@ export default function NotificationsScreen() {
   });
 
   const unread = notifications.filter(n => !n.isRead).length;
+  const filters = ["all", "orders", "delivery", "payments", "bookings", "messages", "system"];
+  const filteredNotifications = filter === "all" ? notifications : notifications.filter(notification => (notification.category || notification.type) === filter);
 
   if (!isAuthenticated) {
     return (
@@ -127,9 +130,13 @@ export default function NotificationsScreen() {
         </View>
       </View>
 
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
+        {filters.map(value => <Pressable key={value} onPress={() => setFilter(value)} style={[styles.filterChip, filter === value && styles.filterChipActive]}><Text style={[styles.filterText, filter === value && styles.filterTextActive]}>{value === "all" ? "All" : value[0].toUpperCase() + value.slice(1)}</Text></Pressable>)}
+      </ScrollView>
+
       {isLoading ? (
         <View style={styles.centerFlex}><ActivityIndicator color={Colors.primary} /></View>
-      ) : notifications.length === 0 ? (
+      ) : filteredNotifications.length === 0 ? (
         <View style={[styles.centerFlex, { paddingBottom: 80 }]}>
           <View style={styles.emptyIconWrap}>
             <Ionicons name="notifications-outline" size={48} color={Colors.border} />
@@ -141,7 +148,7 @@ export default function NotificationsScreen() {
         </View>
       ) : (
         <FlatList
-          data={notifications}
+          data={filteredNotifications}
           keyExtractor={i => i.id}
           contentContainerStyle={[styles.list, { paddingBottom: 60 + insets.bottom }]}
           showsVerticalScrollIndicator={false}
@@ -177,6 +184,11 @@ const styles = StyleSheet.create({
   unreadBadgeText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
   markAllText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.primary },
   list: { padding: 16 },
+  filters: { paddingHorizontal: 16, paddingVertical: 10, gap: 8, backgroundColor: Colors.surface },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18, backgroundColor: Colors.borderLight },
+  filterChipActive: { backgroundColor: Colors.primary },
+  filterText: { color: Colors.textSecondary, fontFamily: "Inter_600SemiBold", fontSize: 12 },
+  filterTextActive: { color: "#fff" },
   card: {
     flexDirection: "row", alignItems: "center", gap: 12,
     backgroundColor: Colors.surface, borderRadius: 14, padding: 14,

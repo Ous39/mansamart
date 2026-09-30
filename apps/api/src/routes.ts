@@ -10,8 +10,8 @@ import {
   reviews, reviewHelpfulVotes, cartItems, wishlistItems, notifications,
   userActivity, flashDeals, addresses, shopperProfiles, vendorProfiles, providerProfiles, coupons, banners,
   wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
-  orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, pushNotifications, auditLogs, orderVendorFulfillments, passwordResetTokens, adminMfaChallenges,
-  authIdentities, phoneOtpChallenges, externalAuthTokens, pushDevices, notificationPreferences,
+  orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, auditLogs, orderVendorFulfillments, passwordResetTokens, adminMfaChallenges,
+  authIdentities, phoneOtpChallenges, externalAuthTokens, pushDevices, notificationPreferences, notificationDeliveries,
 } from "@mansamart/database/schema";
 import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql, isNull } from "drizzle-orm";
 import {
@@ -29,8 +29,8 @@ import { hashAdminMfaChallenge, isAdminMfaCodeValid, isAdminMfaRequired } from "
 import { generatePhoneOtp, hashPhoneOtp, normalizeGambianPhone, phoneOtpCanExposeDevelopmentCode, verifyPhoneOtp } from "./phone-auth";
 import { isPhoneOtpConfigured, sendPhoneOtp } from "./sms";
 import { identityTokenHash, verifyIdentityToken } from "./identity-providers";
-import { deliverPushNotification, pushAllowed } from "./push";
-import { isExpoPushToken, notificationCategory } from "./push-rules";
+import { createOrchestratedNotification } from "./notification-service";
+import { isExpoPushToken } from "./push-rules";
 import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
 import {
   VENDOR_FULFILLMENT_STATUSES,
@@ -411,26 +411,9 @@ function generateOrderQrCode(orderId: string, purpose = "order") {
 
 async function notifyUser(userId: string | null | undefined, type: string, title: string, body: string, actionRoute?: string, data: Record<string, any> = {}) {
   if (!userId) return;
-  const category = notificationCategory(type);
-  const [notification] = await db.insert(notifications).values({
-    userId,
-    type,
-    title,
-    body,
-    icon: type === "delivery" ? "bicycle-outline" : type === "payment" ? "wallet-outline" : "notifications-outline",
-    color: type === "delivery" ? "#E8813A" : type === "payment" ? "#0EA47A" : "#2563EB",
-    actionRoute,
-  }).returning().catch(() => [] as any[]);
-  if (await pushAllowed(userId, category).catch(() => category !== "promotions")) {
-    const [queued] = await db.insert(pushNotifications).values({
-      userId,
-      title,
-      body,
-      category,
-      data: { ...data, actionRoute, type },
-    }).returning().catch(() => [] as any[]);
-    if (queued?.id) void deliverPushNotification(queued.id).catch(() => {});
-  }
+  const entityType = data.orderId ? "order" : data.bookingId ? "booking" : data.ticketId ? "support_ticket" : data.deliveryId ? "delivery" : undefined;
+  const entityId = data.orderId || data.bookingId || data.ticketId || data.deliveryId;
+  const notification = await createOrchestratedNotification({ userId, type, title, body, actionRoute, data, entityType, entityId }).catch(() => null);
   emitRealtime("notification:new", { notification, data: { ...data, actionRoute, type } }, [`user:${userId}`]);
 }
 
@@ -1784,26 +1767,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userName: user.name,
       }).returning();
 
-      await db.insert(notifications).values({
-        userId: user.id,
-        type: "booking",
-        title: "Booking Submitted!",
-        body: `Your booking for ${service.name} on ${data.date} at ${data.time} is pending confirmation.`,
-        icon: "calendar-outline",
-        color: "#7B4FA3",
-        actionRoute: "/bookings",
-      });
+      await notifyUser(user.id, "booking_submitted", "Booking Submitted!", `Your booking for ${service.name} on ${data.date} at ${data.time} is pending confirmation.`, "/bookings", { bookingId: b.id, status: "pending" });
 
       if (service.providerId) {
-        await db.insert(notifications).values({
-          userId: service.providerId,
-          type: "booking",
-          title: "New Service Booking",
-          body: `${user.name} requested ${service.name} on ${data.date} at ${data.time}.`,
-          icon: "calendar-outline",
-          color: "#7B4FA3",
-          actionRoute: "/bookings",
-        });
+        await notifyUser(service.providerId, "new_booking", "New Service Booking", `${user.name} requested ${service.name} on ${data.date} at ${data.time}.`, "/bookings", { bookingId: b.id, status: "pending" });
       }
 
       return res.status(201).json({ ...b, providerName: service.providerName });
@@ -1827,15 +1794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(eq(bookings.id, param(req, "id")))
         .returning();
       if (b.userId && b.userId !== user.id) {
-        await db.insert(notifications).values({
-          userId: b.userId,
-          type: "booking",
-          title: "Booking Updated",
-          body: `${b.serviceName} is now ${status.replace(/_/g, " ")}.`,
-          icon: "calendar-outline",
-          color: "#7B4FA3",
-          actionRoute: "/bookings",
-        });
+        await notifyUser(b.userId, "booking_updated", "Booking Updated", `${b.serviceName} is now ${status.replace(/_/g, " ")}.`, "/bookings", { bookingId: b.id, status });
       }
       return res.json(b);
     } catch (err: any) {
@@ -2061,14 +2020,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/notifications/:id/read", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    await db.update(notifications).set({ isRead: true })
+    const now = new Date();
+    await db.update(notifications).set({ isRead: true, readAt: now })
       .where(and(eq(notifications.id, param(req, "id")), eq(notifications.userId, user.id)));
+    await db.update(notificationDeliveries).set({ readAt: now, updatedAt: now })
+      .where(and(eq(notificationDeliveries.notificationId, param(req, "id")), eq(notificationDeliveries.userId, user.id)));
     return res.json({ success: true });
   });
 
   app.put("/api/notifications/read-all", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
     const user = (req as any).user;
-    await db.update(notifications).set({ isRead: true }).where(eq(notifications.userId, user.id));
+    const now = new Date();
+    await db.update(notifications).set({ isRead: true, readAt: now }).where(eq(notifications.userId, user.id));
+    await db.update(notificationDeliveries).set({ readAt: now, updatedAt: now }).where(eq(notificationDeliveries.userId, user.id));
     return res.json({ success: true });
   });
 
@@ -2092,9 +2056,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         messages: z.boolean().optional(),
         promotions: z.boolean().optional(),
         security: z.boolean().optional(),
+        pushEnabled: z.boolean().optional(),
+        emailEnabled: z.boolean().optional(),
+        whatsappEnabled: z.boolean().optional(),
+        whatsappPhone: z.string().trim().regex(/^\+?[1-9]\d{7,14}$/).nullable().optional(),
+        quietHoursEnabled: z.boolean().optional(),
+        quietHoursStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+        quietHoursEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+        timezone: z.string().trim().min(3).max(80).optional(),
+        unreadEscalationEnabled: z.boolean().optional(),
       }).strict().parse(req.body);
-      const [updated] = await db.insert(notificationPreferences).values({ userId: user.id, ...values, updatedAt: new Date() })
-        .onConflictDoUpdate({ target: notificationPreferences.userId, set: { ...values, updatedAt: new Date() } }).returning();
+      if (values.whatsappEnabled && !values.whatsappPhone) return res.status(400).json({ message: "A WhatsApp phone number is required for opt-in" });
+      const consent = values.whatsappEnabled === true ? new Date() : values.whatsappEnabled === false ? null : undefined;
+      const saved = { ...values, ...(consent !== undefined ? { whatsappOptInAt: consent } : {}), updatedAt: new Date() };
+      const [updated] = await db.insert(notificationPreferences).values({ userId: user.id, ...saved })
+        .onConflictDoUpdate({ target: notificationPreferences.userId, set: saved }).returning();
       return res.json(updated);
     } catch (err: any) {
       if (err.name === "ZodError") return res.status(400).json({ message: "Invalid notification preferences" });
@@ -2176,6 +2152,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       orders: allOrders.length,
       bookings: allBookings.length,
       revenue,
+    });
+  });
+
+  app.get("/api/admin/notifications", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
+    const recent = await db.select().from(notificationDeliveries).orderBy(desc(notificationDeliveries.createdAt)).limit(100);
+    return res.json({
+      recent,
+      stats: {
+        queued: recent.filter(row => row.status === "queued").length,
+        sent: recent.filter(row => ["sent", "delivered", "read"].includes(row.status)).length,
+        failed: recent.filter(row => row.status === "failed").length,
+        cancelled: recent.filter(row => row.status === "cancelled").length,
+      },
     });
   });
 
@@ -3542,7 +3531,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const nearest = riders.map(r => ({ ...r, distance: distanceKm(r.latitude, r.longitude, safePickupLatitude, safePickupLongitude) })).sort((a, b) => a.distance - b.distance).slice(0, 5);
       for (const rider of nearest) {
         await db.insert(deliveryRequests).values({ deliveryId: delivery.id, riderId: rider.userId, distanceKm: rider.distance, status: "offered", expiresAt: new Date(Date.now() + 60_000) });
-        await db.insert(notifications).values({ userId: rider.userId, type: "delivery", title: "New Delivery Request", body: `Pickup: ${safePickupAddress}. Fee: D ${safeDeliveryFee.toLocaleString()}`, icon: "bicycle-outline", color: "#E8813A", actionRoute: "/(rider)/deliveries" });
+        await notifyUser(rider.userId, "delivery_offer", "New Delivery Request", `Pickup: ${safePickupAddress}. Fee: D ${safeDeliveryFee.toLocaleString()}`, "/(rider)/deliveries", { deliveryId: delivery.id, orderId: order.id });
       }
       await db.update(orders).set({ status: "rider_searching" as any, updatedAt: new Date() }).where(eq(orders.id, orderId));
       return res.status(201).json({ delivery, offeredRiders: nearest.length });

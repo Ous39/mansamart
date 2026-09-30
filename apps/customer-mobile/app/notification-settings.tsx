@@ -1,5 +1,5 @@
-import React from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,8 +10,11 @@ import { apiRequest } from "@/lib/query-client";
 type Preferences = {
   orders: boolean; delivery: boolean; payments: boolean; bookings: boolean;
   messages: boolean; promotions: boolean; security: boolean;
+  pushEnabled: boolean; emailEnabled: boolean; whatsappEnabled: boolean; whatsappPhone?: string | null;
+  quietHoursEnabled: boolean; quietHoursStart: string; quietHoursEnd: string; unreadEscalationEnabled: boolean;
 };
-const rows: { key: keyof Preferences; title: string; detail: string; icon: any }[] = [
+type CategoryPreference = "orders" | "delivery" | "payments" | "bookings" | "messages" | "promotions" | "security";
+const rows: { key: CategoryPreference; title: string; detail: string; icon: any }[] = [
   { key: "orders", title: "Orders", detail: "Confirmation and fulfilment updates", icon: "bag-check-outline" },
   { key: "delivery", title: "Delivery", detail: "Rider assignment, pickup and arrival", icon: "bicycle-outline" },
   { key: "payments", title: "Payments", detail: "Payment, refund and payout updates", icon: "wallet-outline" },
@@ -24,7 +27,9 @@ const rows: { key: keyof Preferences; title: string; detail: string; icon: any }
 export default function NotificationSettingsScreen() {
   const insets = useSafeAreaInsets();
   const client = useQueryClient();
+  const [whatsappPhone, setWhatsappPhone] = useState("");
   const { data, isLoading } = useQuery<Preferences>({ queryKey: ["/api/notifications/preferences"] });
+  useEffect(() => { if (data?.whatsappPhone) setWhatsappPhone(data.whatsappPhone); }, [data?.whatsappPhone]);
   const save = useMutation({
     mutationFn: (value: Partial<Preferences>) => apiRequest("PUT", "/api/notifications/preferences", value),
     onMutate: async value => {
@@ -47,6 +52,15 @@ export default function NotificationSettingsScreen() {
         <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}>
           <Text style={styles.help}>Choose which push alerts you receive. Security alerts remain available in the app even when push is turned off.</Text>
           <View style={styles.card}>
+            <ChannelRow title="Push notifications" detail="Immediate alerts on this device" value={data.pushEnabled} onChange={value => save.mutate({ pushEnabled: value })}/>
+            <ChannelRow title="Email" detail="Receipts, payment and security updates" value={data.emailEnabled} onChange={value => save.mutate({ emailEnabled: value })}/>
+            <View style={styles.channelBlock}>
+              <ChannelRow title="WhatsApp" detail="Important updates and unread-message escalation" value={data.whatsappEnabled} onChange={value => value ? save.mutate({ whatsappEnabled: true, whatsappPhone }) : save.mutate({ whatsappEnabled: false })}/>
+              <TextInput value={whatsappPhone} onChangeText={setWhatsappPhone} onBlur={() => data.whatsappEnabled && save.mutate({ whatsappPhone })} placeholder="+220 7xxxxxx" keyboardType="phone-pad" style={styles.input}/>
+            </View>
+            <ChannelRow title="Quiet hours" detail="Pause non-critical alerts from 22:00 to 07:00" value={data.quietHoursEnabled} onChange={value => save.mutate({ quietHoursEnabled: value })}/>
+          </View>
+          <View style={styles.card}>
             {rows.map((row, index) => (
               <View key={row.key} style={[styles.item, index < rows.length - 1 && styles.divider]}>
                 <View style={styles.icon}><Ionicons name={row.icon} size={20} color={Colors.primary}/></View>
@@ -66,6 +80,10 @@ export default function NotificationSettingsScreen() {
   );
 }
 
+function ChannelRow({ title, detail, value, onChange }: { title: string; detail: string; value: boolean; onChange: (value: boolean) => void }) {
+  return <View style={styles.item}><View style={styles.copy}><Text style={styles.title}>{title}</Text><Text style={styles.detail}>{detail}</Text></View><Switch value={value} onValueChange={onChange} trackColor={{ true: Colors.primaryLight }} thumbColor={value ? Colors.primary : "#94A3B8"}/></View>;
+}
+
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: Colors.background },
   header: { minHeight: 76, paddingHorizontal: 20, paddingBottom: 14, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: Colors.border },
@@ -80,4 +98,6 @@ const styles = StyleSheet.create({
   title: { color: Colors.text, fontFamily: "Inter_600SemiBold", fontSize: 14 },
   detail: { color: Colors.textMuted, fontFamily: "Inter_400Regular", fontSize: 12, marginTop: 2 },
   security: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 16, backgroundColor: "#fff", borderWidth: 1, borderColor: Colors.border },
+  channelBlock: { borderTopWidth: 1, borderTopColor: Colors.borderLight, paddingBottom: 12 },
+  input: { marginHorizontal: 15, minHeight: 44, borderWidth: 1, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 12, color: Colors.text, backgroundColor: Colors.background },
 });

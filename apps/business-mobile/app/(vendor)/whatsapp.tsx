@@ -43,6 +43,8 @@ type Overview = {
     activeCarts: number;
     whatsappOrders: number;
     whatsappRevenue: number;
+    responseRate: number;
+    averageResponseMinutes: number;
   };
   recentConversations: {
     id: string;
@@ -162,6 +164,8 @@ export default function WhatsAppCommerceScreen() {
             <Stat icon="cart-outline" label="Active carts" value={String(data?.stats.activeCarts || 0)} />
             <Stat icon="receipt-outline" label="Orders" value={String(data?.stats.whatsappOrders || 0)} />
             <Stat icon="cash-outline" label="Revenue" value={`D ${(data?.stats.whatsappRevenue || 0).toLocaleString()}`} />
+            <Stat icon="speedometer-outline" label="Response rate" value={`${data?.stats.responseRate ?? 100}%`} />
+            <Stat icon="time-outline" label="Avg. response" value={`${data?.stats.averageResponseMinutes || 0} min`} />
           </View>
 
           <View style={styles.tokenCard}>

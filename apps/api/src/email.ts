@@ -1,17 +1,33 @@
 import nodemailer from "nodemailer";
 
-export async function sendPasswordResetEmail(email: string, token: string) {
+function transporter() {
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) throw new Error("SMTP is not configured");
-  const resetUrl = new URL(process.env.PASSWORD_RESET_URL || "https://mansamart.gm/reset-password");
-  resetUrl.searchParams.set("token", token);
-  const transporter = nodemailer.createTransport({
+  return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
     secure: process.env.SMTP_SECURE === "true",
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
     tls: { rejectUnauthorized: process.env.NODE_ENV === "production" },
   });
-  await transporter.sendMail({
+}
+
+export async function sendTransactionalEmail(email: string, subject: string, body: string, actionUrl?: string | null) {
+  const safeBody = body.replace(/[<>]/g, "");
+  const safeUrl = actionUrl && /^https:\/\/(mansamart\.gm|admin\.mansamart\.gm)(\/|$)/.test(actionUrl) ? actionUrl : null;
+  await transporter().sendMail({
+    from: process.env.SMTP_FROM || "MansaMart <no-reply@mansamart.gm>",
+    to: email,
+    subject,
+    text: `${body}${safeUrl ? `\n\nOpen MansaMart: ${safeUrl}` : ""}`,
+    html: `<p>${safeBody}</p>${safeUrl ? `<p><a href="${safeUrl}">Open MansaMart</a></p>` : ""}`,
+  });
+}
+
+export async function sendPasswordResetEmail(email: string, token: string) {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) throw new Error("SMTP is not configured");
+  const resetUrl = new URL(process.env.PASSWORD_RESET_URL || "https://mansamart.gm/reset-password");
+  resetUrl.searchParams.set("token", token);
+  await transporter().sendMail({
     from: process.env.SMTP_FROM || "MansaMart <no-reply@mansamart.gm>",
     to: email,
     subject: "Reset your MansaMart password",
@@ -22,14 +38,7 @@ export async function sendPasswordResetEmail(email: string, token: string) {
 
 export async function sendAdminLoginCode(email: string, code: string) {
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) throw new Error("SMTP is not configured");
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: process.env.SMTP_SECURE === "true",
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
-    tls: { rejectUnauthorized: process.env.NODE_ENV === "production" },
-  });
-  await transporter.sendMail({
+  await transporter().sendMail({
     from: process.env.SMTP_FROM || "MansaMart <no-reply@mansamart.gm>",
     to: email,
     subject: "Your MansaMart administrator sign-in code",

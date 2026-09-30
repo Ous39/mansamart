@@ -763,5 +763,12 @@ export async function runStartupMigrations() {
     console.warn(`[startup-migration skipped] WhatsApp commerce migration file: ${error?.message || error}`);
   }
 
+  try {
+    const notificationMigrationPath = fileURLToPath(new URL("../../../packages/database/migrations/alibaba_notifications_migration.sql", import.meta.url));
+    await execSafe(readFileSync(notificationMigrationPath, "utf8"), "multi-channel notification orchestration");
+  } catch (error: any) {
+    console.warn(`[startup-migration skipped] Notification orchestration migration file: ${error?.message || error}`);
+  }
+
   console.log("Database compatibility check completed.");
 }

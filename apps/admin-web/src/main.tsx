@@ -23,6 +23,7 @@ const sections = {
   Support: "/api/admin/support/tickets",
   Audit: "/api/admin/audit-logs",
   WhatsApp: "/api/admin/whatsapp",
+  Notifications: "/api/admin/notifications",
 } as const;
 type Section = keyof typeof sections;
 type AdminLoginResult =

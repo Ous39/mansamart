@@ -4,6 +4,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiTokenAccounts,
+  notificationDeliveries,
   products,
   whatsappCampaigns,
   whatsappCarts,
@@ -15,6 +16,7 @@ import {
 } from "@mansamart/database/schema";
 import { db } from "../db";
 import { requireAuth, requireRole } from "../auth";
+import { createOrchestratedNotification } from "../notification-service";
 
 function currentUser(req: Request) {
   return (req as any).user as { id: string; role: string; name: string };
@@ -91,12 +93,15 @@ async function recordIncomingMessage(body: any) {
     unreadCount: 1,
     lastMessagePreview: incoming.text?.body || `[${incoming.type || "message"}]`,
     lastMessageAt: new Date(),
+    firstUnreadAt: new Date(),
   }).onConflictDoUpdate({
     target: [whatsappThreads.vendorId, whatsappThreads.customerId],
     set: {
       unreadCount: sql`${whatsappThreads.unreadCount} + 1`,
       lastMessagePreview: incoming.text?.body || `[${incoming.type || "message"}]`,
       lastMessageAt: new Date(),
+      firstUnreadAt: sql`CASE WHEN ${whatsappThreads.unreadCount} = 0 THEN now() ELSE COALESCE(${whatsappThreads.firstUnreadAt}, now()) END`,
+      firstResponseAt: sql`CASE WHEN ${whatsappThreads.unreadCount} = 0 THEN NULL ELSE ${whatsappThreads.firstResponseAt} END`,
       updatedAt: new Date(),
     },
   });
@@ -119,6 +124,29 @@ async function recordIncomingMessage(body: any) {
 
   await db.update(whatsappConnections).set({ lastWebhookAt: new Date(), updatedAt: new Date() })
     .where(eq(whatsappConnections.id, connection.id));
+  await createOrchestratedNotification({
+    userId: connection.vendorId,
+    type: "new_message",
+    title: `New WhatsApp message from ${profileName}`,
+    body: incoming.text?.body || `New ${incoming.type || "message"} received`,
+    actionRoute: "/(vendor)/whatsapp",
+    data: { threadId: thread.id },
+    entityType: "whatsapp_thread",
+    entityId: thread.id,
+    dedupeKey: `whatsapp-message:${incoming.id}`,
+  });
+}
+
+async function recordDeliveryStatus(body: any) {
+  const status = webhookValue(body)?.statuses?.[0];
+  if (!status?.id || !status?.status) return;
+  await db.update(whatsappMessages).set({ deliveryStatus: String(status.status) }).where(eq(whatsappMessages.providerMessageId, String(status.id)));
+  await db.update(notificationDeliveries).set({
+    status: String(status.status),
+    deliveredAt: status.status === "delivered" || status.status === "read" ? new Date(Number(status.timestamp || 0) * 1000 || Date.now()) : undefined,
+    readAt: status.status === "read" ? new Date(Number(status.timestamp || 0) * 1000 || Date.now()) : undefined,
+    updatedAt: new Date(),
+  }).where(eq(notificationDeliveries.providerMessageId, String(status.id)));
 }
 
 export function registerWhatsappRoutes(app: Express) {
@@ -142,6 +170,8 @@ export function registerWhatsappRoutes(app: Express) {
       customer: customersById.get(thread.customerId) || null,
     }));
     const checkedOut = carts.filter((cart) => cart.status === "converted");
+    const responded = threads.filter(thread => thread.firstUnreadAt && thread.firstResponseAt);
+    const responseMinutes = responded.map(thread => Math.max(0, (thread.firstResponseAt!.getTime() - thread.firstUnreadAt!.getTime()) / 60_000));
 
     return res.json({
       connection: safeConnection(connection[0]),
@@ -154,6 +184,8 @@ export function registerWhatsappRoutes(app: Express) {
         activeCarts: carts.filter((cart) => cart.status === "active").length,
         whatsappOrders: checkedOut.length,
         whatsappRevenue: checkedOut.reduce((sum, cart) => sum + cart.total, 0),
+        responseRate: threads.length ? Math.round((responded.length / threads.length) * 100) : 100,
+        averageResponseMinutes: responseMinutes.length ? Math.round(responseMinutes.reduce((sum, value) => sum + value, 0) / responseMinutes.length) : 0,
       },
       recentConversations,
       campaigns: campaigns.slice(0, 6),
@@ -216,6 +248,33 @@ export function registerWhatsappRoutes(app: Express) {
     const rows = await db.select().from(whatsappMessages).where(eq(whatsappMessages.threadId, thread.id)).orderBy(desc(whatsappMessages.createdAt));
     await db.update(whatsappThreads).set({ unreadCount: 0, updatedAt: new Date() }).where(eq(whatsappThreads.id, thread.id));
     return res.json(rows.reverse());
+  });
+
+  app.post("/api/vendor/whatsapp/conversations/:id/messages", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
+    const vendorId = currentUser(req).id;
+    const { body } = z.object({ body: z.string().trim().min(1).max(2000) }).parse(req.body);
+    const [thread] = await db.select().from(whatsappThreads).where(and(eq(whatsappThreads.id, String(req.params.id)), eq(whatsappThreads.vendorId, vendorId))).limit(1);
+    if (!thread) return res.status(404).json({ message: "Conversation not found" });
+    const [customer] = await db.select().from(whatsappCustomers).where(eq(whatsappCustomers.id, thread.customerId)).limit(1);
+    const [connection] = await db.select().from(whatsappConnections).where(eq(whatsappConnections.vendorId, vendorId)).limit(1);
+    if (!customer || !connection?.phoneNumberId) return res.status(409).json({ message: "WhatsApp connection is incomplete" });
+    if (!whatsappEnabled() || !process.env.WHATSAPP_SYSTEM_ACCESS_TOKEN) return res.status(503).json({ message: "WhatsApp sending is not enabled" });
+    const version = process.env.WHATSAPP_GRAPH_VERSION || "v23.0";
+    const response = await fetch(`https://graph.facebook.com/${version}/${connection.phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.WHATSAPP_SYSTEM_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: customer.phone.replace(/\D/g, ""), type: "text", text: { preview_url: false, body } }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return res.status(502).json({ message: `WhatsApp rejected the message (${response.status})` });
+    const payload = await response.json() as { messages?: Array<{ id?: string }> };
+    const [message] = await db.insert(whatsappMessages).values({
+      threadId: thread.id, providerMessageId: payload.messages?.[0]?.id, direction: "outbound", type: "text", body, deliveryStatus: "sent",
+    }).returning();
+    await db.update(whatsappThreads).set({
+      unreadCount: 0, firstResponseAt: thread.firstResponseAt || new Date(), lastMessagePreview: body, lastMessageAt: new Date(), updatedAt: new Date(),
+    }).where(eq(whatsappThreads.id, thread.id));
+    return res.status(201).json(message);
   });
 
   app.get("/api/vendor/whatsapp/campaigns", requireAuth, requireRole("vendor"), async (req: Request, res: Response) => {
@@ -289,6 +348,7 @@ export function registerWhatsappRoutes(app: Express) {
     }).onConflictDoNothing();
     try {
       await recordIncomingMessage(req.body);
+      await recordDeliveryStatus(req.body);
       await db.update(whatsappWebhookEvents).set({ status: "processed", processedAt: new Date() })
         .where(eq(whatsappWebhookEvents.eventId, String(eventId)));
     } catch (error) {

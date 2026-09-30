@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { registerRoutes } from "./routes";
 import { runStartupMigrations } from "./startup-migrations";
 import { pool } from "./db";
+import { processNotificationDeliveries } from "./notification-service";
 
 const app = express();
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -106,6 +107,9 @@ async function start() {
   const port = Number.parseInt(process.env.PORT || "5000", 10);
   const host = process.env.HOST || "0.0.0.0";
   server.listen(port, host, () => console.log(`MansaMart API listening on http://${host}:${port}`));
+  const notificationTimer = setInterval(() => void processNotificationDeliveries().catch(error => console.error("Notification delivery worker failed", error)), 30_000);
+  notificationTimer.unref();
+  void processNotificationDeliveries().catch(error => console.error("Notification delivery worker failed", error));
 }
 
 start().catch((error) => {

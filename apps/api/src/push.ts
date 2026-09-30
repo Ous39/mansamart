@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
-import { notificationPreferences, pushDevices, pushNotifications } from "@mansamart/database/schema";
+import { notificationDeliveries, notificationPreferences, pushDevices, pushNotifications } from "@mansamart/database/schema";
 import type { NotificationCategory } from "./push-rules";
 
 export async function pushAllowed(userId: string, category: NotificationCategory): Promise<boolean> {
@@ -16,6 +16,9 @@ export async function deliverPushNotification(notificationId: string): Promise<v
   const devices = await db.select().from(pushDevices).where(and(eq(pushDevices.userId, notification.userId), eq(pushDevices.enabled, true)));
   if (devices.length === 0) {
     await db.update(pushNotifications).set({ status: "skipped", lastError: "No enabled push devices" }).where(eq(pushNotifications.id, notification.id));
+    const orchestratedId = (notification.data as any)?.notificationId;
+    if (orchestratedId) await db.update(notificationDeliveries).set({ status: "skipped", lastError: "No enabled push devices", updatedAt: new Date() })
+      .where(and(eq(notificationDeliveries.notificationId, orchestratedId), eq(notificationDeliveries.channel, "push")));
     return;
   }
 
@@ -48,11 +51,17 @@ export async function deliverPushNotification(notificationId: string): Promise<v
       attempts: sql`${pushNotifications.attempts} + 1`,
       lastError: null,
     }).where(eq(pushNotifications.id, notification.id));
+    const orchestratedId = (notification.data as any)?.notificationId;
+    if (orchestratedId) await db.update(notificationDeliveries).set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(notificationDeliveries.notificationId, orchestratedId), eq(notificationDeliveries.channel, "push")));
   } catch (error) {
     await db.update(pushNotifications).set({
       status: "failed",
       attempts: sql`${pushNotifications.attempts} + 1`,
       lastError: error instanceof Error ? error.message.slice(0, 500) : "Push delivery failed",
     }).where(eq(pushNotifications.id, notification.id));
+    const orchestratedId = (notification.data as any)?.notificationId;
+    if (orchestratedId) await db.update(notificationDeliveries).set({ status: "failed", lastError: error instanceof Error ? error.message.slice(0, 500) : "Push delivery failed", updatedAt: new Date() })
+      .where(and(eq(notificationDeliveries.notificationId, orchestratedId), eq(notificationDeliveries.channel, "push")));
   }
 }

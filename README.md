@@ -240,6 +240,29 @@ GET  https://api.mansamart.gm/api/webhooks/whatsapp
 POST https://api.mansamart.gm/api/webhooks/whatsapp
 ```
 
+## Multi-channel notifications
+
+Customer, Business and Rider accounts can separately control order, delivery,
+payment, booking, message, promotion and security alerts. Every event is first
+saved in the in-app inbox and may then be delivered by push, email or opted-in
+WhatsApp according to its priority and the recipient's preferences.
+
+Critical security, failed-payment, refund, cancellation and arrival alerts can
+bypass quiet hours. Promotions never do and remain disabled by default. High
+priority seller events and customer messages that remain unread for five
+minutes can schedule an approved WhatsApp template; reading the notification
+before the deadline cancels the escalation. A deduplication key prevents a
+provider retry from generating the same notification twice.
+
+Apply `packages/database/migrations/alibaba_notifications_migration.sql` to an
+existing database. Configure `WHATSAPP_PHONE_NUMBER_ID`,
+`WHATSAPP_SYSTEM_ACCESS_TOKEN`, and approved templates named
+`mansamart_unread_message`, `mansamart_action_required`, and
+`mansamart_transaction_update`. Keep `WHATSAPP_ENABLED=false` until Meta has
+approved the sender, templates, opt-in wording and webhook. The delivery worker
+retries failed email and WhatsApp sends with bounded exponential backoff and
+records queued, sent, delivered, read, cancelled and failed states.
+
 Apply `packages/database/migrations/whatsapp_commerce_migration.sql` before enabling the module. Configure `WHATSAPP_VERIFY_TOKEN` and `WHATSAPP_APP_SECRET` on the API server. Webhook payloads are rejected unless their Meta HMAC signature is valid. Keep `WHATSAPP_ENABLED=false` until the Meta Business app, WhatsApp Business Account and production phone number are approved.
 
 ## Production security checklist

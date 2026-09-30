@@ -307,8 +307,16 @@ export const notifications = pgTable("notifications", {
   icon: text("icon").notNull().default("notifications-outline"),
   color: text("color").notNull().default("#6B7280"),
   actionRoute: text("action_route"),
+  category: text("category").notNull().default("system"),
+  priority: text("priority").notNull().default("normal"),
+  dedupeKey: text("dedupe_key"),
+  entityType: text("entity_type"),
+  entityId: varchar("entity_id"),
+  readAt: timestamp("read_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("idx_notifications_dedupe_key").on(table.dedupeKey),
+]);
 
 // ─── NEW TABLES ────────────────────────────────────────────────────────────
 
@@ -888,9 +896,40 @@ export const notificationPreferences = pgTable("notification_preferences", {
   messages: boolean("messages").notNull().default(true),
   promotions: boolean("promotions").notNull().default(false),
   security: boolean("security").notNull().default(true),
+  pushEnabled: boolean("push_enabled").notNull().default(true),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  whatsappEnabled: boolean("whatsapp_enabled").notNull().default(false),
+  whatsappPhone: text("whatsapp_phone"),
+  whatsappOptInAt: timestamp("whatsapp_opt_in_at"),
+  quietHoursEnabled: boolean("quiet_hours_enabled").notNull().default(false),
+  quietHoursStart: text("quiet_hours_start").notNull().default("22:00"),
+  quietHoursEnd: text("quiet_hours_end").notNull().default("07:00"),
+  timezone: text("timezone").notNull().default("Africa/Banjul"),
+  unreadEscalationEnabled: boolean("unread_escalation_enabled").notNull().default(true),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("idx_notification_preferences_user_unique").on(table.userId),
+]);
+
+export const notificationDeliveries = pgTable("notification_deliveries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  notificationId: varchar("notification_id").notNull().references(() => notifications.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  channel: text("channel").notNull(),
+  status: text("status").notNull().default("queued"),
+  providerMessageId: text("provider_message_id"),
+  templateName: text("template_name"),
+  attempts: integer("attempts").notNull().default(0),
+  scheduledAt: timestamp("scheduled_at").notNull().defaultNow(),
+  sentAt: timestamp("sent_at"),
+  deliveredAt: timestamp("delivered_at"),
+  readAt: timestamp("read_at"),
+  lastError: text("last_error"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("idx_notification_delivery_channel").on(table.notificationId, table.channel),
 ]);
 
 export const auditLogs = pgTable("audit_logs", {
@@ -952,6 +991,9 @@ export const whatsappThreads = pgTable("whatsapp_threads", {
   unreadCount: integer("unread_count").notNull().default(0),
   lastMessagePreview: text("last_message_preview"),
   lastMessageAt: timestamp("last_message_at"),
+  firstUnreadAt: timestamp("first_unread_at"),
+  firstResponseAt: timestamp("first_response_at"),
+  escalationSentAt: timestamp("escalation_sent_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
@@ -1109,4 +1151,5 @@ export type ProfileCompletionCheck = typeof profileCompletionChecks.$inferSelect
 export type PushNotification = typeof pushNotifications.$inferSelect;
 export type PushDevice = typeof pushDevices.$inferSelect;
 export type NotificationPreference = typeof notificationPreferences.$inferSelect;
+export type NotificationDelivery = typeof notificationDeliveries.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
