@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "MansaMart Rider",
+    "slug": "mansamart-rider",
+    "version": "2.0.0",
+    "orientation": "default",
+    "icon": "./assets/images/icon.png",
+    "scheme": "mansamart-rider",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#2563EB"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "gm.mansamart.rider",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "MansaMart Rider uses your foreground location while you are online or completing an active delivery.",
+        "NSCameraUsageDescription": "MansaMart Rider uses the camera for rider identity documents and delivery QR verification.",
+        "NSPhotoLibraryUsageDescription": "MansaMart Rider needs photo access for your profile, vehicle, licence, and identity documents."
+      }
+    },
+    "android": {
+      "package": "gm.mansamart.rider",
+      "adaptiveIcon": {
+        "backgroundColor": "#2B7A6E",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_EXTERNAL_STORAGE",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      "expo-apple-authentication",
+      "expo-notifications",
+      "expo-secure-store",
+      "expo-location",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow MansaMart Rider to access photos for rider verification documents.",
+          "cameraPermission": "Allow MansaMart Rider to capture verification documents."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

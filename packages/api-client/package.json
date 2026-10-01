@@ -1,0 +1,1 @@
+{"name":"@mansamart/api-client","version":"2.0.0","private":true,"type":"module","exports":"./src/index.ts","scripts":{"typecheck":"tsc --noEmit"},"dependencies":{"@mansamart/shared-types":"workspace:*"},"devDependencies":{"typescript":"~5.9.2"}}
