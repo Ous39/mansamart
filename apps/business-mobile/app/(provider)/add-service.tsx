@@ -18,6 +18,7 @@ const PRICE_TYPES = [
   { id: "hourly", label: "Per Hour" },
   { id: "per_room", label: "Per Room" },
 ];
+const SERVICE_LOCATIONS = ["customer", "provider", "remote", "flexible"] as const;
 
 export default function AddServiceScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -33,6 +34,13 @@ export default function AddServiceScreen() {
   const [features, setFeatures] = useState("");
   const [serviceAreas, setServiceAreas] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [packages, setPackages] = useState("");
+  const [addOns, setAddOns] = useState("");
+  const [serviceLocation, setServiceLocation] = useState<typeof SERVICE_LOCATIONS[number]>("customer");
+  const [travelFee, setTravelFee] = useState("0");
+  const [depositPercent, setDepositPercent] = useState("0");
+  const [minimumLeadHours, setMinimumLeadHours] = useState("2");
+  const [cancellationPolicy, setCancellationPolicy] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -54,6 +62,9 @@ export default function AddServiceScreen() {
     setFeatures(Array.isArray(existing.features) ? existing.features.join("\n") : "");
     setServiceAreas(Array.isArray(existing.serviceAreas) ? existing.serviceAreas.join(", ") : "");
     setImageUrl(existing.imageUrl || "");
+    setPackages(Array.isArray(existing.packages) ? existing.packages.map((item: any) => `${item.name}|${item.price}|${item.description || ""}`).join("\n") : "");
+    setAddOns(Array.isArray(existing.addOns) ? existing.addOns.map((item: any) => `${item.name}|${item.price}`).join("\n") : "");
+    setServiceLocation(existing.serviceLocation || "customer"); setTravelFee(String(existing.travelFee || 0)); setDepositPercent(String(existing.depositPercent || 0)); setMinimumLeadHours(String(existing.minimumLeadHours || 2)); setCancellationPolicy(existing.cancellationPolicy || "");
   }, [existing]);
 
   const handleSave = async () => {
@@ -70,6 +81,10 @@ export default function AddServiceScreen() {
         features: features.split("\n").map((value) => value.trim()).filter(Boolean),
         serviceAreas: serviceAreas.split(",").map((value) => value.trim()).filter(Boolean),
         imageUrl: imageUrl || undefined,
+        gallery: imageUrl ? [imageUrl] : [],
+        packages: packages.split("\n").map(row => row.split("|").map(value => value.trim())).filter(([packageName, packagePrice]) => packageName && Number(packagePrice) > 0).map(([packageName, packagePrice, packageDescription]) => ({ name: packageName, price: Math.round(Number(packagePrice)), description: packageDescription || undefined })),
+        addOns: addOns.split("\n").map(row => row.split("|").map(value => value.trim())).filter(([addOnName, addOnPrice]) => addOnName && Number(addOnPrice) >= 0).map(([addOnName, addOnPrice]) => ({ name: addOnName, price: Math.round(Number(addOnPrice)) })),
+        serviceLocation, travelFee: Math.max(0, Math.round(Number(travelFee || 0))), depositPercent: Math.min(100, Math.max(0, Math.round(Number(depositPercent || 0)))), minimumLeadHours: Math.max(0, Math.round(Number(minimumLeadHours || 0))), cancellationPolicy: cancellationPolicy.trim() || undefined,
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/services/provider/mine"] });
       await queryClient.invalidateQueries({ queryKey: ["/api/provider/dashboard"] });
@@ -227,6 +242,13 @@ export default function AddServiceScreen() {
             </View>
           </View>
 
+          <View><Text style={styles.label}>Where is the service provided?</Text><View style={styles.locationRow}>{SERVICE_LOCATIONS.map(value => <Pressable key={value} style={[styles.locationChip, serviceLocation === value && styles.locationChipActive]} onPress={() => setServiceLocation(value)}><Text style={[styles.locationText, serviceLocation === value && { color: "#fff" }]}>{value}</Text></Pressable>)}</View></View>
+          <View style={styles.priceRow}><View style={{ flex: 1 }}><Text style={styles.label}>Travel Fee (GMD)</Text><View style={styles.inputWrap}><TextInput style={styles.input} value={travelFee} onChangeText={setTravelFee} keyboardType="numeric" /></View></View><View style={{ flex: 1 }}><Text style={styles.label}>Deposit %</Text><View style={styles.inputWrap}><TextInput style={styles.input} value={depositPercent} onChangeText={setDepositPercent} keyboardType="numeric" /></View></View></View>
+          <View><Text style={styles.label}>Minimum Booking Notice (hours)</Text><View style={styles.inputWrap}><TextInput style={styles.input} value={minimumLeadHours} onChangeText={setMinimumLeadHours} keyboardType="numeric" /></View></View>
+          <View><Text style={styles.label}>Service Packages</Text><Text style={styles.hint}>One per line: Package name | Price | Description</Text><View style={[styles.inputWrap, styles.largeInput]}><TextInput style={[styles.input, { flex: 1 }]} value={packages} onChangeText={setPackages} multiline placeholder="Basic|500|Consultation and assessment&#10;Premium|1500|Complete service" placeholderTextColor={Colors.textMuted} /></View></View>
+          <View><Text style={styles.label}>Optional Add-ons</Text><Text style={styles.hint}>One per line: Add-on name | Price</Text><View style={[styles.inputWrap, styles.largeInput]}><TextInput style={[styles.input, { flex: 1 }]} value={addOns} onChangeText={setAddOns} multiline placeholder="Express service|250&#10;Extra room|300" placeholderTextColor={Colors.textMuted} /></View></View>
+          <View><Text style={styles.label}>Cancellation Policy</Text><View style={[styles.inputWrap, styles.largeInput]}><TextInput style={[styles.input, { flex: 1 }]} value={cancellationPolicy} onChangeText={setCancellationPolicy} multiline placeholder="Explain notice periods, deposits and rescheduling…" placeholderTextColor={Colors.textMuted} /></View></View>
+
           <View>
             <Text style={styles.label}>Service Photo</Text>
             {imageUrl ? <Image source={{ uri: imageUrl }} style={styles.serviceImage} /> : null}
@@ -295,6 +317,7 @@ const styles = StyleSheet.create({
   priceTypeChipActive: { backgroundColor: "#7B4FA3", borderColor: "#7B4FA3" },
   priceTypeText: { fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.textSecondary },
   priceTypeTextActive: { color: "#fff" },
+  locationRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, locationChip: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 999, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border }, locationChipActive: { backgroundColor: "#7B4FA3", borderColor: "#7B4FA3" }, locationText: { color: Colors.textSecondary, fontFamily: "Inter_600SemiBold", fontSize: 11, textTransform: "capitalize" }, hint: { color: Colors.textMuted, fontSize: 10, marginTop: -4, marginBottom: 7 }, largeInput: { minHeight: 100, alignItems: "flex-start", paddingTop: 12 },
   saveBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     backgroundColor: "#7B4FA3", borderRadius: 16, height: 56, marginTop: 8,

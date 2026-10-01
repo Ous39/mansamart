@@ -95,6 +95,11 @@ export default function AddProductScreen() {
   const [isFeatured, setIsFeatured] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [background, setBackground] = useState<"white" | "grey" | "brand" | "gradient" | "custom">("white");
+  const [customBackgroundUrl, setCustomBackgroundUrl] = useState("");
+  const [removingBackground, setRemovingBackground] = useState(false);
+  const [originalImages, setOriginalImages] = useState<string[]>([]);
+  const { data: mediaCapabilities } = useQuery<any>({ queryKey: ["/api/media/background-removal/capabilities"] });
 
   const activeConfig = useMemo(() => getShopCategoryConfig(category || primaryConfig.id), [category, primaryConfig.id]);
 
@@ -155,6 +160,19 @@ export default function AddProductScreen() {
     setManualUrl("");
   };
 
+  const removeMainBackground = async () => {
+    if (!images[0]) return Alert.alert("Add a photo first", "Upload the main product photo before removing its background.");
+    try {
+      setRemovingBackground(true);
+      const original = images[0];
+      const result = await (await apiRequest("POST", "/api/media/remove-background", { imageUrl: original })).json();
+      setOriginalImages(prev => Array.from(new Set([...prev, original])));
+      setImages(prev => [result.url, ...prev.slice(1)]);
+      Alert.alert("Background removed", "The original is preserved and the transparent PNG is now the main image.");
+    } catch (error: any) { Alert.alert("Background not removed", error?.message || "Use a transparent PNG or configure the server background-removal provider."); }
+    finally { setRemovingBackground(false); }
+  };
+
   const handleSave = async () => {
     if (!canSave) return Alert.alert("Missing fields", "Product name, price, category and subcategory are required.");
     setIsLoading(true);
@@ -180,6 +198,7 @@ export default function AddProductScreen() {
         isFeatured,
         freeShipping,
         images,
+        imageStudio: { background, customBackgroundUrl: background === "custom" ? customBackgroundUrl.trim() || undefined : undefined, originalImages, edited: originalImages.length > 0 || background !== "white" },
         colors: splitList(colors),
         features: splitList(features),
         tags: Array.from(new Set([...splitList(tags), category, subcategory])).filter(Boolean),
@@ -263,6 +282,7 @@ export default function AddProductScreen() {
               <TextInput style={[styles.input, { flex: 1 }]} value={manualUrl} onChangeText={setManualUrl} placeholder="Paste image URL" placeholderTextColor={Colors.textMuted} autoCapitalize="none" />
               <Pressable style={styles.addUrlBtn} onPress={addManualUrl}><Ionicons name="add" size={22} color="#fff" /></Pressable>
             </View>
+            {images[0] && <View style={styles.studio}><View style={[styles.studioPreview, background === "white" && { backgroundColor: "#fff" }, background === "grey" && { backgroundColor: "#E5E7EB" }, background === "brand" && { backgroundColor: activeConfig.color }, background === "gradient" && { backgroundColor: "#DDF7EE" }]}><Image source={toImageSource(images[0]) as any} style={styles.studioImage} resizeMode="contain" /></View><Text style={styles.label}>Product Photo Studio</Text><Text style={styles.sectionSub}>The original photo is preserved. Templates change only the presentation background.</Text><View style={styles.backgroundRow}>{(["white", "grey", "brand", "gradient", "custom"] as const).map(option => <Pressable key={option} style={[styles.backgroundChip, background === option && styles.backgroundChipActive]} onPress={() => setBackground(option)}><Text style={[styles.backgroundText, background === option && { color: "#fff" }]}>{option}</Text></Pressable>)}</View>{background === "custom" && <TextInput style={styles.input} value={customBackgroundUrl} onChangeText={setCustomBackgroundUrl} placeholder="Public HTTPS custom background URL" placeholderTextColor={Colors.textMuted} autoCapitalize="none" />}<Pressable style={[styles.removeBgButton, (!mediaCapabilities?.enabled || removingBackground) && { opacity: .55 }]} disabled={!mediaCapabilities?.enabled || removingBackground} onPress={removeMainBackground}>{removingBackground ? <ActivityIndicator color={Colors.primary} /> : <Ionicons name="cut-outline" size={18} color={Colors.primary} />}<Text style={styles.removeBgText}>{mediaCapabilities?.enabled ? "Remove main photo background" : "Automatic removal needs server setup"}</Text></Pressable></View>}
           </View>
 
           <View style={styles.card}>
@@ -430,6 +450,7 @@ const styles = StyleSheet.create({
   mainBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
   urlRow: { flexDirection: "row", gap: 8, alignItems: "center" },
   addUrlBtn: { width: 48, height: 48, borderRadius: 14, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
+  studio: { gap: 9, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.borderLight }, studioPreview: { width: "100%", height: 210, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: Colors.border }, studioImage: { width: "100%", height: "100%" }, backgroundRow: { flexDirection: "row", flexWrap: "wrap", gap: 7 }, backgroundChip: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: 999, backgroundColor: Colors.borderLight }, backgroundChipActive: { backgroundColor: Colors.primary }, backgroundText: { color: Colors.textSecondary, fontFamily: "Inter_600SemiBold", fontSize: 11, textTransform: "capitalize" }, removeBgButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, minHeight: 45, borderWidth: 1, borderColor: Colors.primary, borderRadius: 13 }, removeBgText: { color: Colors.primary, fontFamily: "Inter_700Bold", fontSize: 12 },
   twoCols: { flexDirection: "row", gap: 10 },
   oneCol: { flexDirection: "column" },
   catGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
