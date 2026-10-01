@@ -94,6 +94,8 @@ function BookingCard({ booking, onCancel }: { booking: Booking; onCancel: () => 
         </View>
       </View>
       <View style={styles.bookingDetails}>
+        {booking.selectedPackage?.name && <View style={styles.bookingDetail}><Ionicons name="layers-outline" size={16} color={Colors.textMuted} /><Text style={styles.bookingDetailText}>{booking.selectedPackage.name}</Text></View>}
+        {Array.isArray(booking.selectedAddOns) && booking.selectedAddOns.length > 0 && <View style={styles.bookingDetail}><Ionicons name="add-circle-outline" size={16} color={Colors.textMuted} /><Text style={styles.bookingDetailText}>{booking.selectedAddOns.map(item => item.name).join(", ")}</Text></View>}
         <View style={styles.bookingDetail}>
           <Ionicons name="calendar-outline" size={14} color={Colors.textMuted} />
           <Text style={styles.bookingDetailText}>
@@ -110,6 +112,7 @@ function BookingCard({ booking, onCancel }: { booking: Booking; onCancel: () => 
             <Text style={styles.bookingDetailText} numberOfLines={1}>{booking.address}</Text>
           </View>
         )}
+        {booking.depositAmount ? <View style={styles.bookingDetail}><Ionicons name="card-outline" size={16} color={Colors.textMuted} /><Text style={styles.bookingDetailText}>Deposit: D {booking.depositAmount.toLocaleString()}</Text></View> : null}
       </View>
       <View style={styles.bookingFooter}>
         <Text style={styles.bookingPrice}>D {booking.price}</Text>

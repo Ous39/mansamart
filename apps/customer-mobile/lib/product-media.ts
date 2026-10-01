@@ -68,3 +68,19 @@ export function getProductImages(product: any): ProductImageSource[] {
 export function getProductMainImage(product: any): ProductImageSource | null {
   return getProductImages(product)[0] ?? null;
 }
+
+export function getProductStudioBackground(product: any): { color: string; image: ProductImageSource | null } {
+  const studio = product?.imageStudio;
+  const background = studio?.background;
+  const colors: Record<string, string> = {
+    white: "#FFFFFF",
+    grey: "#E5E7EB",
+    brand: "#E6FAF3",
+    gradient: "#DDF7EE",
+    custom: "#FFFFFF",
+  };
+  return {
+    color: colors[background] || "#F3F4F6",
+    image: background === "custom" ? toImageSource(studio?.customBackgroundUrl) : null,
+  };
+}

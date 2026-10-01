@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -60,12 +60,20 @@ export default function ServiceDetailScreen() {
   const [selectedTime, setSelectedTime] = useState(TIMES[0]);
   const [address, setAddress] = useState(user?.address ?? "");
   const [notes, setNotes] = useState("");
+  const [selectedPackageName, setSelectedPackageName] = useState<string | null>(null);
+  const [selectedAddOnNames, setSelectedAddOnNames] = useState<string[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<"customer" | "provider" | "remote">("customer");
   const [showModal, setShowModal] = useState(false);
   const [isBooked, setIsBooked] = useState(false);
   const [bookingPending, setBookingPending] = useState(false);
   const btnScale = useSharedValue(1);
 
   const btnStyle = useAnimatedStyle(() => ({ transform: [{ scale: btnScale.value }] }));
+
+  useEffect(() => {
+    if (!service?.serviceLocation || service.serviceLocation === "flexible") return;
+    setSelectedLocation(service.serviceLocation);
+  }, [service?.serviceLocation]);
 
   if (isLoading) {
     return (
@@ -89,13 +97,23 @@ export default function ServiceDetailScreen() {
   const cat = serviceCategories.find(c => c.id === service.category);
   const priceLabel = service.priceType === "hourly" ? "/hr" : service.priceType === "per_room" ? "/room" : "";
   const features: string[] = Array.isArray(service.features) ? service.features : [];
+  const packages: { name: string; price: number; description?: string }[] = Array.isArray(service.packages) ? service.packages : [];
+  const addOns: { name: string; price: number }[] = Array.isArray(service.addOns) ? service.addOns : [];
+  const gallery: string[] = Array.from(new Set([service.imageUrl, ...(Array.isArray(service.gallery) ? service.gallery : [])].filter(Boolean)));
+  const allowedLocations = service.serviceLocation === "flexible" ? ["customer", "provider", "remote"] : [service.serviceLocation || "customer"];
+  const selectedPackage = packages.find(item => item.name === selectedPackageName);
+  const basePrice = Number(selectedPackage?.price ?? service.price ?? 0);
+  const addOnTotal = addOns.filter(item => selectedAddOnNames.includes(item.name)).reduce((sum, item) => sum + Number(item.price), 0);
+  const travelFee = selectedLocation === "customer" ? Number(service.travelFee || 0) : 0;
+  const total = basePrice + addOnTotal + travelFee;
+  const deposit = Math.round(total * Number(service.depositPercent || 0) / 100);
 
   const handleBook = async () => {
     if (!user) {
       router.push("/(auth)/login");
       return;
     }
-    if (address.trim().length < 5) {
+    if (selectedLocation === "customer" && address.trim().length < 5) {
       Alert.alert("Address required", "Enter the address where the service should be provided.");
       return;
     }
@@ -104,7 +122,7 @@ export default function ServiceDetailScreen() {
       btnScale.value = withSpring(0.95, { damping: 10 }, () => {
         btnScale.value = withSpring(1);
       });
-      await addBooking({ serviceId: service.id, date: selectedDay, time: selectedTime, notes, address: address.trim() });
+      await addBooking({ serviceId: service.id, date: selectedDay, time: selectedTime, notes, address: selectedLocation === "customer" ? address.trim() : selectedLocation === "remote" ? "Remote service" : "Provider location", selectedPackageName: selectedPackage?.name, selectedAddOnNames, serviceLocation: selectedLocation });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsBooked(true);
       setShowModal(true);
@@ -186,6 +204,16 @@ export default function ServiceDetailScreen() {
           <Text style={styles.sectionLabel}>About this service</Text>
           <Text style={styles.description}>{service.description}</Text>
 
+          {gallery.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.galleryRow}>{gallery.map((url, index) => <Image key={`${url}-${index}`} source={{ uri: url }} style={styles.galleryImage} />)}</ScrollView>}
+
+          {packages.length > 0 && <><View style={styles.divider} /><Text style={styles.sectionLabel}>Choose a package</Text><View style={styles.optionList}>{packages.map(item => { const active = selectedPackageName === item.name; return <Pressable key={item.name} style={[styles.optionCard, active && styles.optionCardActive]} onPress={() => setSelectedPackageName(active ? null : item.name)}><View style={styles.optionHeader}><Text style={styles.optionName}>{item.name}</Text><Text style={styles.optionPrice}>D {Number(item.price).toLocaleString()}</Text></View>{item.description ? <Text style={styles.optionDescription}>{item.description}</Text> : null}<Ionicons name={active ? "checkmark-circle" : "ellipse-outline"} size={21} color={active ? Colors.primary : Colors.textMuted} style={styles.optionCheck} /></Pressable>})}</View></>}
+
+          {addOns.length > 0 && <><View style={styles.divider} /><Text style={styles.sectionLabel}>Optional add-ons</Text><View style={styles.optionList}>{addOns.map(item => { const active = selectedAddOnNames.includes(item.name); return <Pressable key={item.name} style={[styles.addOnRow, active && styles.optionCardActive]} onPress={() => setSelectedAddOnNames(current => active ? current.filter(name => name !== item.name) : [...current, item.name])}><Ionicons name={active ? "checkbox" : "square-outline"} size={22} color={active ? Colors.primary : Colors.textMuted} /><Text style={styles.addOnName}>{item.name}</Text><Text style={styles.optionPrice}>+ D {Number(item.price).toLocaleString()}</Text></Pressable>})}</View></>}
+
+          <View style={styles.divider} />
+          <Text style={styles.sectionLabel}>Service location</Text>
+          <View style={styles.locationRow}>{allowedLocations.map((location: string) => <Pressable key={location} style={[styles.locationChip, selectedLocation === location && styles.locationChipActive]} onPress={() => setSelectedLocation(location as any)}><Ionicons name={location === "customer" ? "home-outline" : location === "provider" ? "business-outline" : "videocam-outline"} size={16} color={selectedLocation === location ? "#fff" : Colors.primary} /><Text style={[styles.locationText, selectedLocation === location && { color: "#fff" }]}>{location === "customer" ? "At my address" : location === "provider" ? "At provider" : "Remote"}</Text></Pressable>)}</View>
+
           <View style={styles.divider} />
 
           <Text style={styles.sectionLabel}>What’s included</Text>
@@ -238,7 +266,7 @@ export default function ServiceDetailScreen() {
 
           <View style={styles.divider} />
 
-          <Text style={styles.sectionLabel}>Service Address</Text>
+          {selectedLocation === "customer" && <><Text style={styles.sectionLabel}>Service Address</Text>
           <View style={styles.inputWrap}>
             <Ionicons name="location-outline" size={16} color={Colors.textMuted} style={{ marginRight: 8 }} />
             <TextInput
@@ -249,7 +277,11 @@ export default function ServiceDetailScreen() {
               placeholderTextColor={Colors.textMuted}
               multiline
             />
-          </View>
+          </View></>}
+
+          <View style={styles.priceBreakdown}><Text style={styles.sectionLabel}>Price breakdown</Text><View style={styles.priceLine}><Text style={styles.priceLineLabel}>{selectedPackage?.name || "Service"}</Text><Text style={styles.priceLineValue}>D {basePrice.toLocaleString()}</Text></View>{addOns.filter(item => selectedAddOnNames.includes(item.name)).map(item => <View key={item.name} style={styles.priceLine}><Text style={styles.priceLineLabel}>{item.name}</Text><Text style={styles.priceLineValue}>D {Number(item.price).toLocaleString()}</Text></View>)}{travelFee > 0 && <View style={styles.priceLine}><Text style={styles.priceLineLabel}>Travel fee</Text><Text style={styles.priceLineValue}>D {travelFee.toLocaleString()}</Text></View>}<View style={[styles.priceLine, styles.priceTotalLine]}><Text style={styles.priceTotalLabel}>Total</Text><Text style={styles.priceTotalValue}>D {total.toLocaleString()}</Text></View>{deposit > 0 && <Text style={styles.depositText}>Deposit required: D {deposit.toLocaleString()} ({service.depositPercent}%)</Text>}</View>
+
+          {service.cancellationPolicy ? <View style={styles.policyCard}><Ionicons name="shield-checkmark-outline" size={20} color={Colors.primary} /><View style={{ flex: 1 }}><Text style={styles.policyTitle}>Cancellation policy</Text><Text style={styles.policyText}>{service.cancellationPolicy}</Text></View></View> : null}
 
           <Text style={[styles.sectionLabel, { marginTop: 16 }]}>Special Notes (optional)</Text>
           <View style={[styles.inputWrap, { minHeight: 80, alignItems: "flex-start", paddingTop: 12 }]}>
@@ -268,7 +300,7 @@ export default function ServiceDetailScreen() {
       <View style={[styles.bottomBar, compact && styles.bottomBarCompact, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 12 }]}>
         <View style={styles.priceSummary}>
           <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalPrice}>D {service.price}{priceLabel}</Text>
+          <Text style={styles.totalPrice}>D {total.toLocaleString()}</Text>
         </View>
         <Animated.View style={[{ flex: 1 }, btnStyle]}>
           <Pressable style={[styles.bookBtn, bookingPending && { opacity: 0.65 }]} onPress={handleBook} disabled={bookingPending || isBooked}>
@@ -355,6 +387,10 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: Colors.borderLight, marginVertical: 20 },
   sectionLabel: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.text, marginBottom: 12 },
   description: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.textSecondary, lineHeight: 22 },
+  galleryRow: { gap: 10, paddingTop: 14 }, galleryImage: { width: 180, height: 120, borderRadius: 14, backgroundColor: Colors.borderLight },
+  optionList: { gap: 10 }, optionCard: { position: "relative", borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 14, paddingRight: 44, backgroundColor: Colors.background }, optionCardActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryLight }, optionHeader: { flexDirection: "row", justifyContent: "space-between", gap: 10 }, optionName: { flex: 1, color: Colors.text, fontFamily: "Inter_700Bold", fontSize: 14 }, optionPrice: { color: Colors.primary, fontFamily: "Inter_700Bold", fontSize: 13 }, optionDescription: { color: Colors.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 5 }, optionCheck: { position: "absolute", right: 12, bottom: 12 }, addOnRow: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: Colors.border, borderRadius: 12 }, addOnName: { flex: 1, color: Colors.text, fontFamily: "Inter_500Medium" },
+  locationRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, locationChip: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 44, paddingHorizontal: 12, borderWidth: 1, borderColor: Colors.primary, borderRadius: 12 }, locationChipActive: { backgroundColor: Colors.primary }, locationText: { color: Colors.primary, fontFamily: "Inter_600SemiBold", fontSize: 12 },
+  priceBreakdown: { marginTop: 18, padding: 16, backgroundColor: Colors.borderLight, borderRadius: 14 }, priceLine: { flexDirection: "row", justifyContent: "space-between", gap: 12, marginBottom: 8 }, priceLineLabel: { flex: 1, color: Colors.textSecondary, fontSize: 13 }, priceLineValue: { color: Colors.text, fontFamily: "Inter_600SemiBold", fontSize: 13 }, priceTotalLine: { borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 10, marginTop: 2 }, priceTotalLabel: { color: Colors.text, fontFamily: "Inter_700Bold", fontSize: 15 }, priceTotalValue: { color: Colors.primary, fontFamily: "Inter_700Bold", fontSize: 17 }, depositText: { color: Colors.primary, fontFamily: "Inter_600SemiBold", fontSize: 12 }, policyCard: { flexDirection: "row", gap: 10, padding: 14, borderRadius: 14, backgroundColor: Colors.primaryLight, marginTop: 14 }, policyTitle: { color: Colors.text, fontFamily: "Inter_700Bold", fontSize: 13, marginBottom: 4 }, policyText: { color: Colors.textSecondary, fontSize: 12, lineHeight: 18 },
   featuresList: { gap: 8 },
   featureItem: { flexDirection: "row", alignItems: "center", gap: 10 },
   featureCheck: { width: 20, height: 20, borderRadius: 6, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },

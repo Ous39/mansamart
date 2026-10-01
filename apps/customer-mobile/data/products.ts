@@ -11,6 +11,7 @@ export interface Product {
   image?: any;
   imageUrl?: string;
   images?: any[];
+  imageStudio?: { background: string; customBackgroundUrl?: string; originalImages?: string[]; edited?: boolean };
   placeholderColor?: string;
   placeholderIcon?: string;
   description: string;

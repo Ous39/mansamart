@@ -1827,6 +1827,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         time: z.string().min(2).max(30),
         address: z.string().trim().min(5).max(500),
         notes: z.string().trim().max(1000).optional(),
+        selectedPackageName: z.string().trim().min(1).max(80).optional(),
+        selectedAddOnNames: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+        serviceLocation: z.enum(["customer", "provider", "remote"]),
       });
       const data = schema.parse(req.body);
       const appointment = new Date(`${data.date}T23:59:59`);
@@ -1838,7 +1841,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const [service] = await db.select().from(services).where(eq(services.id, data.serviceId)).limit(1);
       if (!service || !service.isAvailable) return res.status(404).json({ message: "Service is unavailable" });
-      const appointmentStart = new Date(`${data.date}T${data.time}:00`);
+      const timeMatch = data.time.trim().match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+      if (!timeMatch) return res.status(400).json({ message: "Choose a valid appointment time." });
+      let appointmentHour = Number(timeMatch[1]);
+      const appointmentMinute = Number(timeMatch[2]);
+      const meridiem = timeMatch[3]?.toUpperCase();
+      if (appointmentMinute > 59 || (meridiem && (appointmentHour < 1 || appointmentHour > 12)) || (!meridiem && appointmentHour > 23)) return res.status(400).json({ message: "Choose a valid appointment time." });
+      if (meridiem === "PM" && appointmentHour !== 12) appointmentHour += 12;
+      if (meridiem === "AM" && appointmentHour === 12) appointmentHour = 0;
+      const appointmentStart = new Date(`${data.date}T${String(appointmentHour).padStart(2, "0")}:${String(appointmentMinute).padStart(2, "0")}:00`);
       const minimumStart = new Date(Date.now() + Number(service.minimumLeadHours || 0) * 60 * 60_000);
       if (Number.isNaN(appointmentStart.getTime()) || appointmentStart < minimumStart) return res.status(409).json({ message: `This provider requires at least ${service.minimumLeadHours || 0} hours booking notice.` });
 
@@ -1856,6 +1867,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       )).limit(1);
       if (providerConflict) return res.status(409).json({ message: "That appointment time was just booked. Choose another time." });
 
+      const packages = Array.isArray(service.packages) ? service.packages : [];
+      const addOns = Array.isArray(service.addOns) ? service.addOns : [];
+      const selectedPackage = data.selectedPackageName
+        ? packages.find((item) => item.name === data.selectedPackageName)
+        : null;
+      if (data.selectedPackageName && !selectedPackage) return res.status(400).json({ message: "That service package is no longer available." });
+      const uniqueAddOnNames = Array.from(new Set(data.selectedAddOnNames));
+      const selectedAddOns = uniqueAddOnNames.map((name) => addOns.find((item) => item.name === name));
+      if (selectedAddOns.some((item) => !item)) return res.status(400).json({ message: "One of the selected add-ons is no longer available." });
+      const allowedLocations = service.serviceLocation === "flexible" ? ["customer", "provider", "remote"] : [service.serviceLocation];
+      if (!allowedLocations.includes(data.serviceLocation)) return res.status(400).json({ message: "That service location is not offered." });
+      const basePrice = Number(selectedPackage?.price ?? service.price);
+      const addOnTotal = selectedAddOns.reduce((sum, item) => sum + Number(item?.price || 0), 0);
+      const travelFee = data.serviceLocation === "customer" ? Number(service.travelFee || 0) : 0;
+      const bookingTotal = basePrice + addOnTotal + travelFee;
+      const depositAmount = Math.round(bookingTotal * Number(service.depositPercent || 0) / 100);
+
       const [b] = await db.insert(bookings).values({
         serviceId: service.id,
         serviceName: service.name,
@@ -1864,7 +1892,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         time: data.time,
         address: data.address,
         notes: data.notes,
-        price: service.price,
+        price: bookingTotal,
+        basePrice,
+        travelFee,
+        depositAmount,
+        selectedPackage: selectedPackage || null,
+        selectedAddOns: selectedAddOns.filter(Boolean) as { name: string; price: number }[],
+        serviceLocation: data.serviceLocation,
         userId: user.id,
         userName: user.name,
       }).returning();

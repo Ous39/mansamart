@@ -23,7 +23,7 @@ import { useWishlist } from "@/contexts/WishlistContext";
 import { ReviewsSection } from "@/components/ReviewsSection";
 import { ProductCard } from "@/components/ProductCard";
 import { apiRequest } from "@/lib/query-client";
-import { getProductImages } from "@/lib/product-media";
+import { getProductImages, getProductStudioBackground } from "@/lib/product-media";
 
 function formatPrice(value: unknown) {
   return `D ${Number(value ?? 0).toLocaleString()}`;
@@ -75,6 +75,7 @@ export default function ProductDetailScreen() {
 
   const productImages = useMemo(() => getProductImages(product), [product]);
   const mainImage = productImages[selectedImageIndex] ?? productImages[0] ?? null;
+  const studioBackground = getProductStudioBackground(product);
   const productColors = safeArray(product?.colors);
   const productSizes: string[] = typeof product?.size === "string" ? product.size.split(",").map((v: string) => v.trim()).filter(Boolean) : safeArray(product?.sizes);
   const productFeatures = safeArray(product?.features);
@@ -156,9 +157,10 @@ export default function ProductDetailScreen() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={[styles.detailContent, { paddingBottom: 142 + insets.bottom }]} showsVerticalScrollIndicator={false}>
-        <View style={[styles.imageWrap, { height: imageHeight }]}>
+        <View style={[styles.imageWrap, { height: imageHeight, backgroundColor: studioBackground.color }]}>
+          {studioBackground.image ? <Image source={studioBackground.image} style={StyleSheet.absoluteFillObject} resizeMode="cover" /> : null}
           {mainImage ? (
-            <Image source={mainImage} style={styles.productImage} resizeMode="cover" />
+            <Image source={mainImage} style={styles.productImage} resizeMode={product.imageStudio?.edited ? "contain" : "cover"} />
           ) : (
             <View style={[styles.productImage, styles.placeholder, { backgroundColor: product.placeholderColor ?? Colors.primary }]}>
               <Ionicons name={(product.placeholderIcon ?? "bag-outline") as any} size={86} color="rgba(255,255,255,0.65)" />

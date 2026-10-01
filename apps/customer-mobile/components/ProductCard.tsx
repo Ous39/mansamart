@@ -16,7 +16,7 @@ import Colors from "@/constants/colors";
 import { Product } from "@/data/products";
 import { useWishlist } from "@/contexts/WishlistContext";
 import { useCart } from "@/contexts/CartContext";
-import { getProductImages, getProductMainImage } from "@/lib/product-media";
+import { getProductImages, getProductMainImage, getProductStudioBackground } from "@/lib/product-media";
 
 interface ProductCardProps {
   onPress?: () => void;
@@ -74,15 +74,17 @@ export function ProductCard({ product, style, onPress: onPressProp }: ProductCar
   const mainImage = getProductMainImage(product);
   const imageCount = productImages.length;
   const safeStock = Number((product as any).stock ?? 0);
+  const studioBackground = getProductStudioBackground(product);
 
   return (
     <Pressable
       onPress={handlePress}
       style={({ pressed }) => [styles.card, { width: cardWidth }, style, pressed && { opacity: 0.94 }]}
     >
-      <View style={styles.imageContainer}>
+      <View style={[styles.imageContainer, { backgroundColor: studioBackground.color }]}>
+        {studioBackground.image ? <Image source={studioBackground.image} style={StyleSheet.absoluteFillObject} resizeMode="cover" /> : null}
         {mainImage ? (
-          <Image source={mainImage} style={styles.image} resizeMode="cover" />
+          <Image source={mainImage} style={styles.image} resizeMode={(product as any).imageStudio?.edited ? "contain" : "cover"} />
         ) : (
           <View style={[styles.placeholder, { backgroundColor: product.placeholderColor ?? Colors.primary }]}>
             <Ionicons

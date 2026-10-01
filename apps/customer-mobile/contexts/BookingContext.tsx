@@ -16,6 +16,12 @@ export interface Booking {
   time: string;
   status: "pending" | "confirmed" | "in_progress" | "completed" | "cancelled";
   price: number;
+  basePrice?: number;
+  travelFee?: number;
+  depositAmount?: number;
+  selectedPackage?: { name: string; price: number; description?: string } | null;
+  selectedAddOns?: { name: string; price: number }[];
+  serviceLocation?: "customer" | "provider" | "remote";
   address?: string;
   notes?: string;
   createdAt?: string;
@@ -27,6 +33,9 @@ export interface NewBookingInput {
   time: string;
   address: string;
   notes?: string;
+  selectedPackageName?: string;
+  selectedAddOnNames?: string[];
+  serviceLocation: "customer" | "provider" | "remote";
 }
 
 interface BookingContextValue {
