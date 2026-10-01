@@ -30,6 +30,9 @@ export const users = pgTable("users", {
   gender: text("gender"),
   dateOfBirth: text("date_of_birth"),
   role: roleEnum("role").notNull().default("user"),
+  accountStatus: text("account_status").notNull().default("active"),
+  suspensionReason: text("suspension_reason"),
+  suspendedAt: timestamp("suspended_at"),
   businessName: text("business_name"),
   businessType: text("business_type"),
   bio: text("bio"),
@@ -695,6 +698,43 @@ export const staff = pgTable("staff", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const adminAccessProfiles = pgTable("admin_access_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  staffRole: text("staff_role").notNull().default("super_admin"),
+  permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+  department: text("department").notNull().default("management"),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [uniqueIndex("idx_admin_access_profiles_user_unique").on(table.userId)]);
+
+export const platformSettings = pgTable("platform_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").$type<boolean | number | string | Record<string, unknown>>().notNull(),
+  category: text("category").notNull().default("general"),
+  description: text("description"),
+  isSensitive: boolean("is_sensitive").notNull().default(false),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const operationalIncidents = pgTable("operational_incidents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  type: text("type").notNull(),
+  severity: text("severity").notNull().default("medium"),
+  title: text("title").notNull(),
+  description: text("description"),
+  entityType: text("entity_type"),
+  entityId: varchar("entity_id"),
+  status: text("status").notNull().default("open"),
+  assignedTo: varchar("assigned_to").references(() => users.id, { onDelete: "set null" }),
+  resolution: text("resolution"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const supportTickets = pgTable("support_tickets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
@@ -1136,6 +1176,9 @@ export type DeliveryRider = typeof deliveryRiders.$inferSelect;
 export type Delivery = typeof deliveries.$inferSelect;
 export type DeliveryRequest = typeof deliveryRequests.$inferSelect;
 export type Staff = typeof staff.$inferSelect;
+export type AdminAccessProfile = typeof adminAccessProfiles.$inferSelect;
+export type PlatformSetting = typeof platformSettings.$inferSelect;
+export type OperationalIncident = typeof operationalIncidents.$inferSelect;
 export type SupportTicket = typeof supportTickets.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;

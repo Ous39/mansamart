@@ -12,6 +12,7 @@ import {
   wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
   orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, auditLogs, orderVendorFulfillments, passwordResetTokens, adminMfaChallenges,
   authIdentities, phoneOtpChallenges, externalAuthTokens, pushDevices, notificationPreferences, notificationDeliveries,
+  adminAccessProfiles, platformSettings, operationalIncidents,
 } from "@mansamart/database/schema";
 import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql, isNull } from "drizzle-orm";
 import {
@@ -29,6 +30,7 @@ import { hashAdminMfaChallenge, isAdminMfaCodeValid, isAdminMfaRequired } from "
 import { generatePhoneOtp, hashPhoneOtp, normalizeGambianPhone, phoneOtpCanExposeDevelopmentCode, verifyPhoneOtp } from "./phone-auth";
 import { isPhoneOtpConfigured, sendPhoneOtp } from "./sms";
 import { identityTokenHash, verifyIdentityToken } from "./identity-providers";
+import { ADMIN_PERMISSIONS, ADMIN_STAFF_ROLES, hasAdminPermission, isSafePlatformSettingValue, permissionsForRole, type AdminPermission, type AdminStaffRole } from "./admin-control";
 import { createOrchestratedNotification } from "./notification-service";
 import { isExpoPushToken } from "./push-rules";
 import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
@@ -63,6 +65,21 @@ function clientAudience(req: Request): ClientAudience | null {
 
 function roleAllowedForClient(req: Request, role: string): boolean {
   return roleAllowedForAudience(clientAudience(req), role);
+}
+
+function requireAdminPermission(permission: AdminPermission) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).user as typeof users.$inferSelect | undefined;
+    if (!user || user.role !== "admin") return res.status(403).json({ message: "Administrator access required" });
+    const [profile] = await db.select().from(adminAccessProfiles).where(eq(adminAccessProfiles.userId, user.id)).limit(1);
+    const role = (profile?.staffRole || "super_admin") as AdminStaffRole;
+    if (profile?.status === "suspended" || !hasAdminPermission(role, profile?.permissions || [], permission)) {
+      await audit(user.id, "admin.permission_denied", "admin_permission", permission, { staffRole: role }).catch(() => {});
+      return res.status(403).json({ message: `This administrator role does not have ${permission} permission` });
+    }
+    (req as any).adminAccess = { role, permissions: permissionsForRole(role, profile?.permissions || []) };
+    next();
+  };
 }
 
 function defaultRoleForAudience(audience: ClientAudience): "user" | "vendor" | "delivery_rider" {
@@ -630,7 +647,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { review, error: null, status: 201 };
   }
 
-  registerPaymentRoutes(app);
+  registerPaymentRoutes(app, requireAdminPermission("payments.refund"));
   registerWhatsappRoutes(app);
 
   // ────────────────────────────────────────────────────────────────
@@ -731,6 +748,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid email or password" });
       }
       if (user.role !== "admin") return res.status(403).json({ message: "Administrator access required" });
+      if (user.accountStatus !== "active") return res.status(403).json({ message: "This administrator account is suspended" });
       if (isAdminMfaRequired()) {
         if (!process.env.ADMIN_MFA_PEPPER || process.env.ADMIN_MFA_PEPPER.length < 32 || !process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
           return res.status(503).json({ message: "Administrator MFA is not configured" });
@@ -782,7 +800,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           gt(adminMfaChallenges.expiresAt, new Date()),
         ))
         .limit(1);
-      if (!row || row.user.role !== "admin" || row.challenge.attempts >= 5) {
+      if (!row || row.user.role !== "admin" || row.user.accountStatus !== "active" || row.challenge.attempts >= 5) {
         return res.status(401).json({ message: "Invalid or expired verification code" });
       }
       if (!isAdminMfaCodeValid(row.challenge.codeHash, challengeId, code, process.env.ADMIN_MFA_PEPPER || "")) {
@@ -817,6 +835,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const valid = await comparePassword(password, user.password);
       if (!valid) return res.status(401).json({ message: "Invalid email or password" });
+
+      if (user.accountStatus !== "active") return res.status(403).json({ message: "This account is suspended. Contact MansaMart support." });
 
       if (user.role === "admin") {
         return res.status(403).json({ message: "Administrator accounts must sign in at admin.mansamart.gm" });
@@ -2155,6 +2175,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  app.get("/api/admin/access/me", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+    const admin = (req as any).user as typeof users.$inferSelect;
+    const [profile] = await db.select().from(adminAccessProfiles).where(eq(adminAccessProfiles.userId, admin.id)).limit(1);
+    const staffRole = (profile?.staffRole || "super_admin") as AdminStaffRole;
+    return res.json({ staffRole, department: profile?.department || "management", status: profile?.status || "active", permissions: permissionsForRole(staffRole, profile?.permissions || []) });
+  });
+
+  app.get("/api/admin/staff", requireAuth, requireRole("admin"), requireAdminPermission("staff.manage"), async (_req: Request, res: Response) => {
+    const admins = await db.select({ user: users, access: adminAccessProfiles }).from(users)
+      .leftJoin(adminAccessProfiles, eq(adminAccessProfiles.userId, users.id)).where(eq(users.role, "admin")).orderBy(desc(users.createdAt));
+    return res.json(admins.map(({ user, access }) => ({ ...safeUser(user), staffRole: access?.staffRole || "super_admin", permissions: permissionsForRole((access?.staffRole || "super_admin") as AdminStaffRole, access?.permissions || []), department: access?.department || "management", staffStatus: access?.status || "active" })));
+  });
+
+  app.put("/api/admin/staff/:userId", requireAuth, requireRole("admin"), requireAdminPermission("staff.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const targetId = param(req, "userId");
+      const body = z.object({ staffRole: z.enum(ADMIN_STAFF_ROLES), department: z.string().trim().min(2).max(80), status: z.enum(["active", "suspended"]), permissions: z.array(z.enum(ADMIN_PERMISSIONS)).max(ADMIN_PERMISSIONS.length).default([]), currentPassword: z.string().min(1) }).parse(req.body);
+      if (!(await comparePassword(body.currentPassword, admin.password))) return res.status(403).json({ message: "Administrator reauthentication failed" });
+      const [target] = await db.select().from(users).where(and(eq(users.id, targetId), eq(users.role, "admin"))).limit(1);
+      if (!target) return res.status(404).json({ message: "Administrator not found" });
+      if (targetId === admin.id && (body.status !== "active" || body.staffRole !== "super_admin")) return res.status(409).json({ message: "You cannot remove your own active super-administrator access" });
+      const [profile] = await db.insert(adminAccessProfiles).values({ userId: targetId, staffRole: body.staffRole, department: body.department, status: body.status, permissions: body.permissions, updatedAt: new Date() })
+        .onConflictDoUpdate({ target: adminAccessProfiles.userId, set: { staffRole: body.staffRole, department: body.department, status: body.status, permissions: body.permissions, updatedAt: new Date() } }).returning();
+      if (body.status === "suspended") await db.delete(sessions).where(eq(sessions.userId, targetId));
+      await audit(admin.id, "admin.staff_access_updated", "user", targetId, { staffRole: body.staffRole, department: body.department, status: body.status, permissions: body.permissions });
+      return res.json(profile);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid staff access update" });
+      return res.status(500).json({ message: "Staff access update failed" });
+    }
+  });
+
+  app.get("/api/admin/settings", requireAuth, requireRole("admin"), requireAdminPermission("settings.manage"), async (_req: Request, res: Response) => {
+    const rows = await db.select().from(platformSettings).where(eq(platformSettings.isSensitive, false)).orderBy(platformSettings.category, platformSettings.key);
+    return res.json(rows);
+  });
+
+  app.put("/api/admin/settings/:key", requireAuth, requireRole("admin"), requireAdminPermission("settings.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const { value, currentPassword } = z.object({ value: z.unknown(), currentPassword: z.string().min(1) }).parse(req.body);
+      if (!isSafePlatformSettingValue(value)) return res.status(400).json({ message: "Unsupported setting value" });
+      if (!(await comparePassword(currentPassword, admin.password))) return res.status(403).json({ message: "Administrator reauthentication failed" });
+      const key = param(req, "key");
+      const [existing] = await db.select().from(platformSettings).where(and(eq(platformSettings.key, key), eq(platformSettings.isSensitive, false))).limit(1);
+      if (!existing) return res.status(404).json({ message: "Editable setting not found" });
+      const [updated] = await db.update(platformSettings).set({ value: value as any, updatedBy: admin.id, updatedAt: new Date() }).where(eq(platformSettings.key, key)).returning();
+      await audit(admin.id, "admin.setting_updated", "platform_setting", key, { previousValue: existing.value, value });
+      return res.json(updated);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Invalid setting update" });
+      return res.status(500).json({ message: "Setting update failed" });
+    }
+  });
+
+  app.get("/api/admin/incidents", requireAuth, requireRole("admin"), requireAdminPermission("dashboard.read"), async (_req: Request, res: Response) => {
+    return res.json(await db.select().from(operationalIncidents).orderBy(desc(operationalIncidents.createdAt)).limit(200));
+  });
+
+  app.post("/api/admin/incidents", requireAuth, requireRole("admin"), requireAdminPermission("orders.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const body = z.object({ type: z.string().trim().min(2).max(80), severity: z.enum(["low", "medium", "high", "critical"]), title: z.string().trim().min(3).max(180), description: z.string().trim().max(3000).optional(), entityType: z.string().trim().max(80).optional(), entityId: z.string().trim().max(120).optional() }).parse(req.body);
+      const [incident] = await db.insert(operationalIncidents).values({ ...body, assignedTo: admin.id }).returning();
+      await audit(admin.id, "admin.incident_created", "operational_incident", incident.id, { severity: body.severity, type: body.type });
+      return res.status(201).json(incident);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid incident" });
+      return res.status(500).json({ message: "Incident could not be created" });
+    }
+  });
+
+  app.put("/api/admin/incidents/:id", requireAuth, requireRole("admin"), requireAdminPermission("orders.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const { status, resolution } = z.object({ status: z.enum(["open", "investigating", "resolved", "closed"]), resolution: z.string().trim().max(3000).optional() }).parse(req.body);
+      if (["resolved", "closed"].includes(status) && (!resolution || resolution.length < 5)) return res.status(400).json({ message: "A resolution is required" });
+      const [incident] = await db.update(operationalIncidents).set({ status, resolution, resolvedAt: ["resolved", "closed"].includes(status) ? new Date() : null, updatedAt: new Date() }).where(eq(operationalIncidents.id, param(req, "id"))).returning();
+      if (!incident) return res.status(404).json({ message: "Incident not found" });
+      await audit(admin.id, `admin.incident_${status}`, "operational_incident", incident.id, { resolution });
+      return res.json(incident);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Invalid incident update" });
+      return res.status(500).json({ message: "Incident update failed" });
+    }
+  });
+
   app.get("/api/admin/notifications", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
     const recent = await db.select().from(notificationDeliveries).orderBy(desc(notificationDeliveries.createdAt)).limit(100);
     return res.json({
@@ -2179,7 +2287,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows.map(safeUser));
   });
 
-  app.put("/api/admin/users/:id/role", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/users/:id/status", requireAuth, requireRole("admin"), requireAdminPermission("users.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const targetId = param(req, "id");
+      const { status, reason, currentPassword } = z.object({ status: z.enum(["active", "suspended"]), reason: z.string().trim().min(5).max(500), currentPassword: z.string().min(1) }).parse(req.body);
+      if (targetId === admin.id) return res.status(409).json({ message: "You cannot suspend your own account" });
+      if (!(await comparePassword(currentPassword, admin.password))) return res.status(403).json({ message: "Administrator reauthentication failed" });
+      const [target] = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
+      if (!target) return res.status(404).json({ message: "User not found" });
+      const [updated] = await db.update(users).set({ accountStatus: status, suspensionReason: status === "suspended" ? reason : null, suspendedAt: status === "suspended" ? new Date() : null, updatedAt: new Date() }).where(eq(users.id, targetId)).returning();
+      if (status === "suspended") await db.delete(sessions).where(eq(sessions.userId, targetId));
+      await audit(admin.id, `admin.user_${status}`, "user", targetId, { reason, previousStatus: target.accountStatus });
+      return res.json(safeUser(updated));
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid account status update" });
+      return res.status(500).json({ message: "Account status update failed" });
+    }
+  });
+
+  app.put("/api/admin/users/:id/role", requireAuth, requireRole("admin"), requireAdminPermission("users.manage"), async (req: Request, res: Response) => {
     try {
       const admin = (req as any).user;
       const targetId = param(req, "id");
@@ -2202,7 +2329,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/admin/users/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.delete("/api/admin/users/:id", requireAuth, requireRole("admin"), requireAdminPermission("users.manage"), async (req: Request, res: Response) => {
     try {
       const admin = (req as any).user;
       const targetId = param(req, "id");
@@ -2650,7 +2777,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ]);
   });
 
-  app.put("/api/admin/verify/personal/:userId", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/verify/personal/:userId", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
     const { status, note } = z.object({ status: z.enum(["verified", "rejected"]), note: z.string().optional() }).parse(req.body);
     const [u] = await db.update(users).set({ verificationStatus: status, isVerified: status === "verified", profileEditLocked: status === "verified", profileChangeNote: note, updatedAt: new Date() }).where(eq(users.id, param(req, "userId"))).returning();
     if (!u) return res.status(404).json({ message: "User not found" });
@@ -2658,7 +2785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(safeUser(u as any));
   });
 
-  app.put("/api/admin/verify/vendor/:userId", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/verify/vendor/:userId", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
     const { status, note } = z.object({ status: z.enum(["verified", "rejected"]), note: z.string().optional() }).parse(req.body);
     const [vp] = await db.update(vendorProfiles).set({ verificationStatus: status, verificationNote: note, profileEditLocked: status === "verified", updatedAt: new Date() }).where(eq(vendorProfiles.userId, param(req, "userId"))).returning();
     if (!vp) return res.status(404).json({ message: "Vendor profile not found" });
@@ -2667,7 +2794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(vp);
   });
 
-  app.put("/api/admin/verify/provider/:userId", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/verify/provider/:userId", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
     const { status, note } = z.object({ status: z.enum(["verified", "rejected"]), note: z.string().optional() }).parse(req.body);
     const [pp] = await db.update(providerProfiles).set({ verificationStatus: status, verificationNote: note, updatedAt: new Date() }).where(eq(providerProfiles.userId, param(req, "userId"))).returning();
     if (!pp) return res.status(404).json({ message: "Provider profile not found" });
@@ -2676,7 +2803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(pp);
   });
 
-  app.put("/api/admin/verify/rider/:userId", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/verify/rider/:userId", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
     const { status, note } = z.object({ status: z.enum(["verified", "rejected"]), note: z.string().optional() }).parse(req.body);
     const [rider] = await db.update(deliveryRiders).set({ verificationStatus: status, updatedAt: new Date() }).where(eq(deliveryRiders.userId, param(req, "userId"))).returning();
     if (!rider) return res.status(404).json({ message: "Rider profile not found" });
@@ -2690,7 +2817,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows.map(u => ({ ...safeUser(u as any), type: "personal_change" })));
   });
 
-  app.put("/api/admin/personal-profile-change/:userId", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/personal-profile-change/:userId", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
     try {
       const { action, note } = z.object({ action: z.enum(["approve", "reject"]), note: z.string().optional() }).parse(req.body);
       const [u] = await db.select().from(users).where(eq(users.id, param(req, "userId"))).limit(1);
@@ -2718,7 +2845,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows.map(r => ({ ...r.profile, user: r.user ? safeUser(r.user) : null })));
   });
 
-  app.put("/api/admin/vendor-profile-change/:userId", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/vendor-profile-change/:userId", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
     const { action, note } = z.object({ action: z.enum(["approve", "reject"]), note: z.string().optional() }).parse(req.body);
     const userId = param(req, "userId");
     const [profile] = await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, userId)).limit(1);
@@ -3234,7 +3361,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows);
   });
 
-  app.put("/api/admin/wallet/deposits/:id/confirm", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/wallet/deposits/:id/confirm", requireAuth, requireRole("admin"), requireAdminPermission("payments.read"), async (req: Request, res: Response) => {
     try {
       if (process.env.WALLET_PAYMENTS_ENABLED !== "true") return res.status(503).json({ message: "Wallet funding is not available yet" });
       const admin = (req as any).user;
@@ -3278,7 +3405,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows);
   });
 
-  app.put("/api/admin/payouts/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/payouts/:id", requireAuth, requireRole("admin"), requireAdminPermission("payouts.manage"), async (req: Request, res: Response) => {
     try {
       const admin = (req as any).user;
       const { status, note, currentPassword } = z.object({ status: z.enum(["approved", "rejected", "completed"]), note: z.string().trim().max(1000).optional(), currentPassword: z.string().optional() }).parse(req.body);
@@ -3634,7 +3761,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows.map(r => ({ ...r.rider, user: safeUser(r.user) })));
   });
 
-  app.put("/api/admin/riders/:userId/verify", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/riders/:userId/verify", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
     const { status, note } = z.object({ status: z.enum(["verified", "rejected"]), note: z.string().optional() }).parse(req.body);
     const [rider] = await db.update(deliveryRiders).set({ verificationStatus: status, updatedAt: new Date() }).where(eq(deliveryRiders.userId, param(req, "userId"))).returning();
     if (!rider) return res.status(404).json({ message: "Rider profile not found" });
@@ -3673,7 +3800,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows);
   });
 
-  app.put("/api/admin/support/tickets/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/support/tickets/:id", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (req: Request, res: Response) => {
     try {
       const admin = (req as any).user;
       const { status } = z.object({ status: z.enum(["open", "in_progress", "resolved", "closed"]) }).parse(req.body);
@@ -3697,7 +3824,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json(rows.map(({ request, orderTotal, orderStatus, customer }) => ({ ...request, orderTotal, orderStatus, customer: safeUser(customer) })));
   });
 
-  app.put("/api/admin/returns/:id", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.put("/api/admin/returns/:id", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (req: Request, res: Response) => {
     try {
       const admin = (req as any).user;
       const { status, resolution } = z.object({ status: z.enum(["reviewing", "approved", "rejected", "refunded", "closed"]), resolution: z.string().trim().min(3).max(2000) }).parse(req.body);
@@ -3712,7 +3839,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/audit-logs", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
+  app.get("/api/admin/audit-logs", requireAuth, requireRole("admin"), requireAdminPermission("audit.read"), async (_req: Request, res: Response) => {
     const rows = await db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(500);
     return res.json(rows);
   });
@@ -4160,7 +4287,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/orders/live", requireAuth, requireRole("admin"), async (_req: Request, res: Response) => {
+  app.get("/api/admin/orders/live", requireAuth, requireRole("admin"), requireAdminPermission("delivery.manage"), async (_req: Request, res: Response) => {
     const liveOrders = await db.select().from(orders).orderBy(desc(orders.updatedAt)).limit(100);
     const liveDeliveries = await db.select().from(deliveries).orderBy(desc(deliveries.updatedAt)).limit(100);
     const recentEvents = await db.select().from(orderTrackingEvents).orderBy(desc(orderTrackingEvents.createdAt)).limit(100);

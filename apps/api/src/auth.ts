@@ -99,6 +99,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   if (!session || !audience || session.session.audience !== audience || !roleAllowedForAudience(audience, session.user.role)) {
     return res.status(401).json({ message: "Unauthorized" });
   }
+  if (session.user.accountStatus !== "active") {
+    return res.status(403).json({ message: "This account is suspended. Contact MansaMart support." });
+  }
 
   (req as any).user = session.user;
   (req as any).session = session.session;
@@ -113,7 +116,7 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
   if (token) {
     const session = await getSession(token);
     const audience = parseClientAudience(req.header("x-mansamart-app"));
-    if (session && audience && session.session.audience === audience && roleAllowedForAudience(audience, session.user.role)) {
+    if (session && session.user.accountStatus === "active" && audience && session.session.audience === audience && roleAllowedForAudience(audience, session.user.role)) {
       (req as any).user = session.user;
       (req as any).session = session.session;
     }

@@ -24,8 +24,18 @@ const sections = {
   Audit: "/api/admin/audit-logs",
   WhatsApp: "/api/admin/whatsapp",
   Notifications: "/api/admin/notifications",
+  Incidents: "/api/admin/incidents",
+  Staff: "/api/admin/staff",
+  Settings: "/api/admin/settings",
 } as const;
 type Section = keyof typeof sections;
+type AdminAccess = { staffRole: string; department: string; status: string; permissions: string[] };
+const sectionPermission: Partial<Record<Section, string>> = {
+  Users: "users.read", Vendors: "users.read", Verification: "verification.manage", Orders: "orders.manage",
+  "Live Map": "delivery.manage", Riders: "delivery.manage", Finance: "payments.read", Payouts: "payouts.manage",
+  Returns: "support.manage", Support: "support.manage", Audit: "audit.read", Notifications: "notifications.manage",
+  Incidents: "dashboard.read", Staff: "staff.manage", Settings: "settings.manage",
+};
 type AdminLoginResult =
   | { token: string; user: SessionUser; expiresIn: number }
   | { mfaRequired: true; challengeId: string; expiresIn: number };
@@ -37,6 +47,7 @@ function AdminApp() {
   const [busy, setBusy] = useState(!!store.get());
   const [error, setError] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [access, setAccess] = useState<AdminAccess | null>(null);
 
   const loadSection = useCallback(async () => {
     if (!user) return;
@@ -55,6 +66,10 @@ function AdminApp() {
   }, []);
 
   useEffect(() => { void loadSection(); }, [loadSection]);
+  useEffect(() => {
+    if (!user) { setAccess(null); return; }
+    api.request<AdminAccess>("/api/admin/access/me").then(setAccess).catch(() => setAccess(null));
+  }, [user]);
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError("");
@@ -88,11 +103,11 @@ function AdminApp() {
     finally { setBusy(false); }
   }
 
-  async function logout() { await api.logout().catch(() => undefined); store.clear(); setUser(null); setData(null); }
+  async function logout() { await api.logout().catch(() => undefined); store.clear(); setUser(null); setAccess(null); setData(null); }
 
   if (!user) return <Login onSubmit={login} onVerifyMfa={verifyMfa} onCancelMfa={() => { setChallengeId(null); setError(""); }} challengeId={challengeId} busy={busy} error={error}/>;
   return <div className="admin-shell">
-    <aside><div className="brand"><span>M</span><div><b>MansaMart</b><small>CONTROL CENTRE</small></div></div><nav>{(Object.keys(sections) as Section[]).map((item) => <button key={item} className={active === item ? "active" : ""} onClick={() => setActive(item)}><i>{item.slice(0,1)}</i>{item}</button>)}</nav><div className="admin-user"><div>{user.name.slice(0,1)}</div><span><b>{user.name}</b><small>Administrator</small></span><button onClick={logout} title="Sign out">↗</button></div></aside>
+    <aside><div className="brand"><span>M</span><div><b>MansaMart</b><small>CONTROL CENTRE</small></div></div><nav>{(Object.keys(sections) as Section[]).filter((item) => !sectionPermission[item] || access?.permissions.includes(sectionPermission[item]!)).map((item) => <button key={item} className={active === item ? "active" : ""} onClick={() => setActive(item)}><i>{item.slice(0,1)}</i>{item}</button>)}</nav><div className="admin-user"><div>{user.name.slice(0,1)}</div><span><b>{user.name}</b><small>{access?.staffRole?.replace(/_/g, " ") || "Administrator"}</small></span><button onClick={logout} title="Sign out">↗</button></div></aside>
     <main><header><div><p>ADMINISTRATION</p><h1>{active}</h1></div><div className="secure">● Secure session</div></header>{error && <div className="alert">{error}</div>}{busy ? <div className="loading">Loading secure data…</div> : <AdminContent section={active} data={data} refresh={loadSection}/>}</main>
   </div>;
 }
@@ -111,6 +126,7 @@ function Login({ onSubmit, onVerifyMfa, onCancelMfa, challengeId, busy, error }:
 function AdminContent({ section, data, refresh }: { section: Section; data: unknown; refresh: () => Promise<void> }) {
   if (section === "Overview") return <Overview data={data}/>;
   if (section === "Live Map") return <LiveDeliveryMap data={data} refresh={refresh}/>;
+  if (section === "Settings") return <SettingsPanel data={data} refresh={refresh}/>;
   const rows = Array.isArray(data) ? data : data && typeof data === "object" ? Object.values(data as Record<string, unknown>).find(Array.isArray) as unknown[] || [] : [];
   return <section className="data-card"><div className="card-head"><div><h2>{section} management</h2><p>{rows.length} records returned by the live API</p></div><button className="refresh" onClick={() => void refresh()}>Refresh</button></div>{rows.length ? <div className="table-wrap"><table><thead><tr><th>Name / ID</th><th>Status / Role</th><th>Contact / Detail</th><th>Created</th><th>Action</th></tr></thead><tbody>{rows.slice(0,100).map((raw, index) => <AdminRow key={String((raw as Record<string, unknown>).id || index)} section={section} row={raw as Record<string, unknown>} refresh={refresh}/>)}</tbody></table></div> : <div className="empty"><b>No {section.toLowerCase()} found</b><p>New records will appear here automatically.</p></div>}</section>;
 }
@@ -178,8 +194,52 @@ function AdminRow({ section, row, refresh }: { section: Section; row: Record<str
         void post(`/api/admin/payments/${id}/refund`, { reason: reason.trim(), currentPassword });
       }
     }}>Refund</button></div>;
+  } else if (section === "Users") {
+    const suspended = String(row.accountStatus || "active") === "suspended";
+    actions = <div className="row-actions"><button className={suspended ? "" : "danger"} disabled={busy} onClick={() => {
+      const reason = window.prompt(suspended ? "Reason for restoring this account" : "Suspension reason (at least 5 characters)");
+      if (!reason || reason.trim().length < 5) return;
+      const currentPassword = window.prompt("Re-enter your administrator password");
+      if (currentPassword) void run(`/api/admin/users/${id}/status`, { status: suspended ? "active" : "suspended", reason: reason.trim(), currentPassword });
+    }}>{suspended ? "Restore" : "Suspend"}</button></div>;
+  } else if (section === "Incidents") {
+    actions = <div className="row-actions"><button disabled={busy || ["resolved", "closed"].includes(status)} onClick={() => {
+      const resolution = window.prompt("Resolution summary");
+      if (resolution && resolution.trim().length >= 5) void run(`/api/admin/incidents/${id}`, { status: "resolved", resolution: resolution.trim() });
+    }}>Resolve</button></div>;
+  } else if (section === "Staff") {
+    actions = <div className="row-actions"><button disabled={busy} onClick={() => {
+      const staffRole = window.prompt("Role: super_admin, operations_manager, finance_officer, verification_officer, rider_coordinator, support_agent, content_moderator, or auditor", String(row.staffRole || "super_admin"));
+      if (!staffRole) return;
+      const department = window.prompt("Department", String(row.department || "management"));
+      const currentPassword = window.prompt("Re-enter your administrator password");
+      if (department && currentPassword) void run(`/api/admin/staff/${id}`, { staffRole, department, status: String(row.staffStatus || "active"), permissions: [], currentPassword });
+    }}>Edit access</button></div>;
   }
   return <tr><td><b>{name}</b><small>{id.slice(0, 12)}</small></td><td><span className="pill">{status.replace(/_/g, " ")}</span></td><td>{detail}</td><td>{row.createdAt ? new Date(String(row.createdAt)).toLocaleDateString() : "—"}</td><td>{actions}</td></tr>;
+}
+
+function SettingsPanel({ data, refresh }: { data: unknown; refresh: () => Promise<void> }) {
+  const rows = Array.isArray(data) ? data as Record<string, unknown>[] : [];
+  const [busyKey, setBusyKey] = useState("");
+  const update = async (row: Record<string, unknown>) => {
+    const key = String(row.key || "");
+    const current = row.value;
+    let value: unknown;
+    if (typeof current === "boolean") value = !current;
+    else {
+      const entered = window.prompt(`New value for ${key}`, typeof current === "string" ? current : JSON.stringify(current));
+      if (entered === null) return;
+      value = typeof current === "number" ? Number(entered) : entered;
+    }
+    const currentPassword = window.prompt("Re-enter your administrator password to change this setting");
+    if (!currentPassword) return;
+    setBusyKey(key);
+    try { await api.request(`/api/admin/settings/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value, currentPassword }) }); await refresh(); }
+    catch (error) { window.alert(error instanceof Error ? error.message : "Setting update failed"); }
+    finally { setBusyKey(""); }
+  };
+  return <section className="data-card"><div className="card-head"><div><h2>Platform configuration</h2><p>Safe feature flags and operational switches. Every change is audited.</p></div><button className="refresh" onClick={() => void refresh()}>Refresh</button></div><div className="settings-grid">{rows.map((row) => <article key={String(row.key)}><div><b>{String(row.key).replace(/_/g, " ")}</b><small>{String(row.category || "general")}</small></div><p>{String(row.description || "Platform setting")}</p><button className={row.value === true ? "toggle on" : "toggle"} disabled={busyKey === row.key} onClick={() => void update(row)}>{typeof row.value === "boolean" ? row.value ? "Enabled" : "Disabled" : String(row.value)}</button></article>)}</div></section>;
 }
 
 function Overview({ data }: { data: unknown }) {

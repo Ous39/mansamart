@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Express, Request, Response } from "express";
+import type { Express, Request, RequestHandler, Response } from "express";
 import { calculateCommission } from "@mansamart/business-logic";
 import {
   auditLogs,
@@ -286,7 +286,7 @@ async function completeWavePayment(event: z.infer<typeof waveEventSchema>) {
   });
 }
 
-export function registerPaymentRoutes(app: Express) {
+export function registerPaymentRoutes(app: Express, requirePaymentRefundPermission: RequestHandler = (_req, _res, next) => next()) {
   app.get("/api/payments/config", (_req: Request, res: Response) => {
     const readiness = waveReadiness();
     return res.json({
@@ -415,7 +415,7 @@ export function registerPaymentRoutes(app: Express) {
     }
   });
 
-  app.post("/api/admin/payments/:id/refund", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
+  app.post("/api/admin/payments/:id/refund", requireAuth, requireRole("admin"), requirePaymentRefundPermission, async (req: Request, res: Response) => {
     let refundId: string | undefined;
     try {
       const config = getWaveConfig();
