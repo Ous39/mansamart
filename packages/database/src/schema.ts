@@ -231,6 +231,11 @@ export const orderVendorFulfillments = pgTable("order_vendor_fulfillments", {
   subtotal: integer("subtotal").notNull(),
   status: text("status").notNull().default("pending"),
   notes: text("notes"),
+  rejectionReason: text("rejection_reason"),
+  confirmedAt: timestamp("confirmed_at"),
+  preparingAt: timestamp("preparing_at"),
+  readyAt: timestamp("ready_at"),
+  cancelledAt: timestamp("cancelled_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [

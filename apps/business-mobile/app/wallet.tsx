@@ -63,6 +63,7 @@ export default function FinanceScreen() {
           <Summary label="Settled" value={money(data?.summary?.totalSettled)} icon="checkmark-circle-outline" />
           <Summary label="Paid out" value={money(data?.summary?.totalPaidOut)} icon="cash-outline" />
         </View>
+        <View style={styles.periodRow}><Period label="Today" value={money(data?.summary?.todaySettled)} /><Period label="Last 7 days" value={money(data?.summary?.weekSettled)} /><Period label="This month" value={money(data?.summary?.monthSettled)} /></View>
 
         <View style={styles.formCard}>
           <Text style={styles.sectionTitle}>Request a Payout</Text>
@@ -102,6 +103,7 @@ function Summary({ label, value, icon }: { label: string; value: string; icon: s
 function HistoryRow({ icon, title, meta, amount }: { icon: string; title: string; meta: string; amount: string }) {
   return <View style={styles.txRow}><View style={styles.txIcon}><Ionicons name={icon as any} size={17} color={Colors.primary} /></View><View style={{ flex: 1 }}><Text style={styles.txTitle}>{title}</Text><Text style={styles.txMeta}>{meta}</Text></View><Text style={styles.txAmount}>{amount}</Text></View>;
 }
+function Period({ label, value }: { label: string; value: string }) { return <View style={styles.periodCard}><Text style={styles.periodLabel}>{label}</Text><Text style={styles.periodValue}>{value}</Text></View>; }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background }, content: { paddingHorizontal: 20, paddingBottom: 50 },
@@ -109,6 +111,7 @@ const styles = StyleSheet.create({
   balanceCard: { backgroundColor: Colors.primary, borderRadius: 24, padding: 22, marginBottom: 12 }, balanceLabel: { color: "rgba(255,255,255,0.78)", fontFamily: "Inter_500Medium", fontSize: 12 }, balance: { color: "#fff", fontFamily: "Inter_700Bold", fontSize: 34, marginVertical: 8 }, balanceSub: { color: "rgba(255,255,255,0.75)", fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 16 },
   notice: { flexDirection: "row", gap: 9, padding: 12, borderRadius: 12, backgroundColor: "#EFF6FF", marginBottom: 14 }, noticeText: { flex: 1, color: "#1E40AF", fontFamily: "Inter_400Regular", fontSize: 11, lineHeight: 16 },
   summaryRow: { flexDirection: "row", gap: 10, marginBottom: 16 }, summaryCard: { flex: 1, backgroundColor: Colors.surface, borderRadius: 14, padding: 14, gap: 4 }, summaryValue: { fontFamily: "Inter_700Bold", color: Colors.text, fontSize: 16 }, summaryLabel: { fontFamily: "Inter_400Regular", color: Colors.textMuted, fontSize: 11 },
+  periodRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 }, periodCard: { flexGrow: 1, flexBasis: 120, backgroundColor: Colors.surface, borderRadius: 13, padding: 12, borderWidth: 1, borderColor: Colors.borderLight }, periodLabel: { color: Colors.textMuted, fontFamily: "Inter_500Medium", fontSize: 10 }, periodValue: { color: Colors.text, fontFamily: "Inter_700Bold", fontSize: 14, marginTop: 5 },
   formCard: { backgroundColor: Colors.surface, borderRadius: 18, padding: 16, gap: 10, marginBottom: 22 }, sectionTitle: { fontFamily: "Inter_700Bold", color: Colors.text, fontSize: 16, marginTop: 10, marginBottom: 10 }, warning: { color: "#92400E", backgroundColor: "#FFFBEB", padding: 10, borderRadius: 9, fontFamily: "Inter_500Medium", fontSize: 11 },
   methodRow: { flexDirection: "row", gap: 8 }, methodChip: { flex: 1, borderWidth: 1, borderColor: Colors.border, borderRadius: 10, paddingVertical: 9, alignItems: "center" }, methodChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary }, methodText: { color: Colors.textSecondary, fontFamily: "Inter_500Medium", fontSize: 12, textTransform: "capitalize" }, methodTextActive: { color: "#fff" },
   input: { minHeight: 48, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.background, borderRadius: 11, paddingHorizontal: 13, color: Colors.text, fontFamily: "Inter_400Regular" }, primaryBtn: { minHeight: 48, backgroundColor: Colors.text, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 }, primaryBtnText: { color: "#fff", fontFamily: "Inter_700Bold", fontSize: 13 },

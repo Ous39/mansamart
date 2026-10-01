@@ -389,6 +389,11 @@ async function getOrdersForVendor(vendorId: string) {
       total: fulfillment?.subtotal ?? vendorItems.reduce((sum: number, item: any) => sum + Number(item.price) * Number(item.quantity || 1), 0),
       marketplaceOrderStatus: order.status,
       vendorStatus: fulfillment?.status || "pending",
+      fulfillment: fulfillment ? {
+        id: fulfillment.id, notes: fulfillment.notes, rejectionReason: fulfillment.rejectionReason,
+        confirmedAt: fulfillment.confirmedAt, preparingAt: fulfillment.preparingAt,
+        readyAt: fulfillment.readyAt, cancelledAt: fulfillment.cancelledAt,
+      } : null,
     });
   }
   return result;
@@ -1716,7 +1721,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [currentOrder] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
       if (!currentOrder) return res.status(404).json({ message: "Order not found" });
 
-      const { status } = z.object({ status: z.enum(VENDOR_FULFILLMENT_STATUSES) }).parse(req.body);
+      const { status, reason } = z.object({ status: z.enum(VENDOR_FULFILLMENT_STATUSES), reason: z.string().trim().min(5).max(500).optional() }).parse(req.body);
       await ensureVendorFulfillments(currentOrder);
       const [fulfillment] = await db.select().from(orderVendorFulfillments).where(and(
         eq(orderVendorFulfillments.orderId, orderId),
@@ -1726,8 +1731,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!canVendorAdvanceFulfillment(fulfillment.status, status, currentOrder.paymentStatus)) {
         return res.status(409).json({ message: "That fulfillment change is not allowed. Payment must be confirmed and steps must be completed in order." });
       }
+      if (status === "cancelled" && !reason) return res.status(400).json({ message: "A clear rejection reason is required." });
 
-      await db.update(orderVendorFulfillments).set({ status, updatedAt: new Date() }).where(eq(orderVendorFulfillments.id, fulfillment.id));
+      const milestone = status === "confirmed" ? { confirmedAt: new Date() } : status === "preparing" ? { preparingAt: new Date() } : status === "ready_for_pickup" ? { readyAt: new Date() } : status === "cancelled" ? { cancelledAt: new Date(), rejectionReason: reason, notes: reason } : {};
+      await db.update(orderVendorFulfillments).set({ status, ...milestone, updatedAt: new Date() }).where(eq(orderVendorFulfillments.id, fulfillment.id));
       const fulfillmentRows = await db.select().from(orderVendorFulfillments).where(eq(orderVendorFulfillments.orderId, orderId));
       const marketplaceStatus = deriveMarketplaceOrderStatus(currentOrder.status, fulfillmentRows.map((row) => row.status));
       const [updatedOrder] = marketplaceStatus === currentOrder.status
@@ -1735,6 +1742,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : await db.update(orders).set({ status: marketplaceStatus as any, updatedAt: new Date() }).where(eq(orders.id, orderId)).returning();
       await addTracking(orderId, status, "Seller fulfillment updated", `A seller marked their portion as ${status.replace(/_/g, " ")}.`, user, { vendorId: user.id });
       await notifyUser(currentOrder.userId, "order", "Order Updated", `A seller marked part of your order as ${status.replace(/_/g, " ")}.`, `/order/${orderId}`, { orderId, status });
+      if (status === "cancelled") await notifyAdminUsers("order_exception", "Seller rejected paid items", `Order #${orderId.slice(0, 8).toUpperCase()} requires refund or adjustment review. Reason: ${reason}`, `/orders/${orderId}`, { orderId, vendorId: user.id, reason });
       const vendorOrder = (await getOrdersForVendor(user.id)).find((order) => order.id === orderId);
       return res.json(vendorOrder || { ...updatedOrder, vendorStatus: status });
     } catch (error: any) {
@@ -3112,6 +3120,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const revenue = vendorOrders
         .filter(o => ["paid", "settled"].includes(o.paymentStatus) && !["cancelled", "refunded"].includes(o.status))
         .reduce((sum, o) => sum + Number(o.subtotal || 0), 0);
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - 6);
+      const paidOrders = vendorOrders.filter(o => ["paid", "settled"].includes(o.paymentStatus) && !["cancelled", "refunded"].includes(o.status));
+      const todayRevenue = paidOrders.filter(o => new Date(o.createdAt) >= todayStart).reduce((sum, o) => sum + Number(o.subtotal || 0), 0);
+      const weekRevenue = paidOrders.filter(o => new Date(o.createdAt) >= weekStart).reduce((sum, o) => sum + Number(o.subtotal || 0), 0);
       const lowStock = vendorProducts.filter(p => p.stock <= 5).slice(0, 10);
       const categoryStats = Object.values(vendorProducts.reduce((acc: Record<string, any>, p) => {
         const key = p.category || "Other";
@@ -3129,11 +3142,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pendingOrders: vendorOrders.filter(o => o.vendorStatus === "pending").length,
         preparingOrders: vendorOrders.filter(o => o.vendorStatus === "confirmed" || o.vendorStatus === "preparing").length,
         revenue,
+        todayRevenue,
+        weekRevenue,
+        readyOrders: vendorOrders.filter(o => o.vendorStatus === "ready_for_pickup").length,
+        rejectedOrders: vendorOrders.filter(o => o.vendorStatus === "cancelled").length,
         avgRating: vendorProducts.length ? Number((vendorProducts.reduce((s, p) => s + p.rating, 0) / vendorProducts.length).toFixed(1)) : 0,
         completenessScore,
         profileHealth: vendorHealthLabel(completenessScore, profile?.verificationStatus),
       };
-      return res.json({ profile, stats, lowStock, categoryStats, recentOrders: vendorOrders.slice(0, 8), recentProducts: vendorProducts.slice(0, 8) });
+      const actionItems = [
+        ...vendorOrders.filter(o => o.vendorStatus === "pending" && ["paid", "settled"].includes(o.paymentStatus)).map(o => ({ type: "order", priority: "high", id: o.id, title: `Accept order #${o.id.slice(0, 8).toUpperCase()}`, route: `/order/${o.id}` })),
+        ...vendorOrders.filter(o => o.vendorStatus === "preparing").map(o => ({ type: "order", priority: "normal", id: o.id, title: `Finish preparing #${o.id.slice(0, 8).toUpperCase()}`, route: `/order/${o.id}` })),
+        ...lowStock.map(p => ({ type: "inventory", priority: p.stock === 0 ? "high" : "normal", id: p.id, title: `${p.name}: ${p.stock} left`, route: "/(vendor)/products" })),
+      ].slice(0, 12);
+      return res.json({ profile, stats, actionItems, lowStock, categoryStats, recentOrders: vendorOrders.slice(0, 8), recentProducts: vendorProducts.slice(0, 8) });
     } catch (err) {
       console.error(err);
       return res.status(500).json({ message: "Failed to load vendor dashboard" });
@@ -3415,6 +3437,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       db.select().from(payouts).where(eq(payouts.userId, user.id)).orderBy(desc(payouts.createdAt)).limit(50),
     ]);
     const pendingAmounts = recentPayouts.filter((payout) => payout.status === "pending").map((payout) => payout.amount);
+    const financeNow = new Date();
+    const dayStart = new Date(financeNow); dayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(dayStart); weekStart.setDate(weekStart.getDate() - 6);
+    const monthStart = new Date(financeNow.getFullYear(), financeNow.getMonth(), 1);
+    const completedSettlements = recentSettlements.filter((settlement) => settlement.status === "completed");
+    const settledSince = (start: Date) => completedSettlements.filter((settlement) => new Date(settlement.createdAt) >= start).reduce((sum, settlement) => sum + settlement.amount, 0);
     const [profile] = user.role === "vendor"
       ? await db.select().from(vendorProfiles).where(eq(vendorProfiles.userId, user.id)).limit(1)
       : await db.select().from(providerProfiles).where(eq(providerProfiles.userId, user.id)).limit(1);
@@ -3428,6 +3456,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pendingPayout: pendingAmounts.reduce((sum, amount) => sum + amount, 0),
         totalSettled: recentSettlements.filter((settlement) => settlement.status === "completed").reduce((sum, settlement) => sum + settlement.amount, 0),
         totalPaidOut: recentPayouts.filter((payout) => payout.status === "completed").reduce((sum, payout) => sum + payout.amount, 0),
+        todaySettled: settledSince(dayStart),
+        weekSettled: settledSince(weekStart),
+        monthSettled: settledSince(monthStart),
       },
       payoutProfile: {
         verificationStatus: profile?.verificationStatus || "pending",

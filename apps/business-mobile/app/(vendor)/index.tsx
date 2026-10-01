@@ -26,7 +26,8 @@ interface ApiProduct {
 }
 interface VendorDashboardApi {
   profile?: { verificationStatus?: string };
-  stats: { products: number; activeProducts: number; lowStock: number; orders: number; pendingOrders: number; preparingOrders?: number; revenue: number; avgRating: number };
+  stats: { products: number; activeProducts: number; lowStock: number; orders: number; pendingOrders: number; preparingOrders?: number; readyOrders?: number; todayRevenue?: number; weekRevenue?: number; revenue: number; avgRating: number };
+  actionItems?: { type: string; priority: string; id: string; title: string; route: string }[];
   lowStock: ApiProduct[];
   recentOrders: ApiOrder[];
   recentProducts: ApiProduct[];
@@ -106,11 +107,13 @@ export default function VendorDashboard() {
       )}
 
       <View style={styles.statsGrid}>
-        <StatCard label="Total Orders" value={String(dashboard?.stats?.orders ?? myOrders.length)} icon="bag-outline" color="#2563EB" bg="#EFF6FF" />
-        <StatCard label="Pending" value={String(pendingOrders)} icon="time-outline" color="#F59E0B" bg="#FFFBEB" />
-        <StatCard label="Products" value={String(dashboard?.stats?.products ?? myProducts.length)} icon="cube-outline" color={Colors.primary} bg={Colors.primaryLight} />
+        <StatCard label="Today Revenue" value={`D ${Number(dashboard?.stats?.todayRevenue || 0).toLocaleString()}`} icon="cash-outline" color="#2563EB" bg="#EFF6FF" />
+        <StatCard label="Pending Action" value={String(pendingOrders)} icon="time-outline" color="#F59E0B" bg="#FFFBEB" />
+        <StatCard label="Ready for Rider" value={String(dashboard?.stats?.readyOrders ?? 0)} icon="bicycle-outline" color={Colors.primary} bg={Colors.primaryLight} />
         <StatCard label="Avg Rating" value={String(avgRating)} icon="star-outline" color="#F59E0B" bg="#FFFBEB" />
       </View>
+
+      {(dashboard?.actionItems?.length || 0) > 0 && <View style={styles.section}><Text style={styles.sectionTitle}>Action centre</Text>{dashboard!.actionItems!.slice(0, 6).map(item => <Pressable key={`${item.type}-${item.id}`} style={[styles.actionItem, item.priority === "high" && styles.actionItemHigh]} onPress={() => router.push(item.route as any)}><View style={styles.actionItemIcon}><Ionicons name={item.type === "inventory" ? "warning-outline" : "flash-outline"} size={18} color={item.priority === "high" ? "#B91C1C" : Colors.primary} /></View><Text style={styles.actionItemText}>{item.title}</Text><Ionicons name="chevron-forward" size={17} color={Colors.textMuted} /></Pressable>)}</View>}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Top Products</Text>
@@ -265,4 +268,5 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
   alertRow: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#FFFBEB", borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: "#FDE68A" },
   alertIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: "#FEF3C7", alignItems: "center", justifyContent: "center" },
+  actionItem: { flexDirection: "row", alignItems: "center", gap: 10, padding: 13, borderRadius: 14, backgroundColor: Colors.surface, marginBottom: 8, borderWidth: 1, borderColor: Colors.borderLight }, actionItemHigh: { borderColor: "#FECACA", backgroundColor: "#FFF7F7" }, actionItemIcon: { width: 36, height: 36, borderRadius: 11, backgroundColor: Colors.primaryLight, alignItems: "center", justifyContent: "center" }, actionItemText: { flex: 1, color: Colors.text, fontFamily: "Inter_600SemiBold", fontSize: 12 },
 });

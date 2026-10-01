@@ -22,6 +22,7 @@ export function canVendorAdvanceFulfillment(
   if (!PAID_PAYMENT_STATES.has(paymentStatus)) return false;
   return (
     (current === "pending" && next === "confirmed") ||
+    (current === "pending" && next === "cancelled") ||
     (current === "confirmed" && next === "preparing") ||
     (current === "preparing" && next === "ready_for_pickup")
   );

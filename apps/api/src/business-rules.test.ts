@@ -16,6 +16,8 @@ test("only verified business profiles can publish", () => {
 test("vendor fulfillment requires payment and moves forward one step", () => {
   assert.equal(canVendorAdvanceFulfillment("pending", "confirmed", "pending"), false);
   assert.equal(canVendorAdvanceFulfillment("pending", "confirmed", "paid"), true);
+  assert.equal(canVendorAdvanceFulfillment("pending", "cancelled", "paid"), true);
+  assert.equal(canVendorAdvanceFulfillment("confirmed", "cancelled", "paid"), false);
   assert.equal(canVendorAdvanceFulfillment("confirmed", "preparing", "paid"), true);
   assert.equal(canVendorAdvanceFulfillment("preparing", "ready_for_pickup", "settled"), true);
   assert.equal(canVendorAdvanceFulfillment("pending", "ready_for_pickup", "paid"), false);

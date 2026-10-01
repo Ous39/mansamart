@@ -15,7 +15,7 @@ interface ApiOrder {
   status: string; marketplaceOrderStatus?: string; vendorStatus: string; paymentStatus: string; notes?: string; createdAt: string;
 }
 
-const FILTER_OPTIONS = ["All", "Pending", "Confirmed", "Preparing", "Ready"];
+const FILTER_OPTIONS = ["All", "Pending", "Confirmed", "Preparing", "Ready", "Cancelled"];
 
 function getStatusStyle(status: string) {
   const map: Record<string, { bg: string; text: string }> = {
@@ -42,8 +42,8 @@ export default function VendorOrdersScreen() {
   });
 
   const updateStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
-      apiRequest("PUT", `/api/orders/${id}/status`, { status }),
+    mutationFn: ({ id, status, reason }: { id: string; status: string; reason?: string }) =>
+      apiRequest("PUT", `/api/orders/${id}/status`, { status, reason }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/orders"] }),
     onError: (error: any) => Alert.alert("Order not updated", error?.message || "Please try again."),
   });
@@ -54,6 +54,12 @@ export default function VendorOrdersScreen() {
       const wanted = filter === "Ready" ? "ready_for_pickup" : filter.toLowerCase();
       return o.vendorStatus === wanted;
     });
+  const rejectOrder = (id: string) => Alert.alert("Reject this paid order?", "The customer and administrators will be notified for adjustment or refund review. Choose the accurate reason.", [
+    { text: "Keep order", style: "cancel" },
+    { text: "Out of stock", style: "destructive", onPress: () => updateStatus.mutate({ id, status: "cancelled", reason: "One or more ordered items are out of stock." }) },
+    { text: "Cannot fulfil", style: "destructive", onPress: () => updateStatus.mutate({ id, status: "cancelled", reason: "The business cannot fulfil this order within the required time." }) },
+    { text: "Store unavailable", style: "destructive", onPress: () => updateStatus.mutate({ id, status: "cancelled", reason: "The store is temporarily unavailable to prepare this order." }) },
+  ]);
 
   return (
     <View style={styles.container}>
@@ -135,6 +141,7 @@ export default function VendorOrdersScreen() {
                 )}
                 {sellerStatus === "pending" && ["paid", "settled"].includes(o.paymentStatus) && (
                   <View style={styles.actionRow}>
+                    <Pressable style={[styles.actionBtn, styles.rejectBtn]} onPress={() => rejectOrder(o.id)}><Text style={styles.rejectText}>Reject</Text></Pressable>
                     <Pressable
                       style={[styles.actionBtn, { backgroundColor: Colors.primaryLight }]}
                       onPress={() => {
@@ -187,6 +194,7 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: "row", gap: 8, paddingTop: 4 },
   actionBtn: { flex: 1, alignItems: "center", paddingVertical: 8, borderRadius: 10 },
   actionText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  rejectBtn: { borderWidth: 1, borderColor: "#FCA5A5", backgroundColor: "#FEF2F2" }, rejectText: { color: "#B91C1C", fontFamily: "Inter_700Bold", fontSize: 13 },
   paymentWait: { flexDirection: "row", alignItems: "center", gap: 6, padding: 9, borderRadius: 9, backgroundColor: "#FFFBEB" },
   paymentWaitText: { color: "#92400E", fontFamily: "Inter_500Medium", fontSize: 11 },
   progressBtn: { alignItems: "center", backgroundColor: Colors.primary, paddingVertical: 10, borderRadius: 10, marginTop: 4 },
