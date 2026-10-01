@@ -7,10 +7,11 @@ import "./styles.css";
 import "./responsive.css";
 
 const store = createTokenStore("mansamart_admin_session");
-const api = new MansaMartApi(import.meta.env.VITE_API_URL || "http://127.0.0.1:5000", "admin", store.get);
+const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
+const api = new MansaMartApi(API_BASE, "admin", store.get);
 
 const sections = {
-  Overview: "/api/admin/stats",
+  Overview: "/api/admin/dashboard",
   Users: "/api/admin/users",
   Vendors: "/api/admin/vendors",
   Orders: "/api/admin/orders",
@@ -27,14 +28,25 @@ const sections = {
   Incidents: "/api/admin/incidents",
   Staff: "/api/admin/staff",
   Settings: "/api/admin/settings",
+  Disputes: "/api/admin/disputes",
+  Documents: "/api/admin/verifications/documents",
+  Reconciliation: "/api/admin/finance/reconciliation",
+  "System Health": "/api/admin/system-health",
+  Reports: "/api/admin/stats",
 } as const;
 type Section = keyof typeof sections;
 type AdminAccess = { staffRole: string; department: string; status: string; permissions: string[] };
+const safeDocumentUrl = (value: unknown) => {
+  const url = String(value || "");
+  return url.startsWith("/uploads/") || /^https:\/\//i.test(url) ? url : "";
+};
 const sectionPermission: Partial<Record<Section, string>> = {
   Users: "users.read", Vendors: "users.read", Verification: "verification.manage", Orders: "orders.manage",
   "Live Map": "delivery.manage", Riders: "delivery.manage", Finance: "payments.read", Payouts: "payouts.manage",
   Returns: "support.manage", Support: "support.manage", Audit: "audit.read", Notifications: "notifications.manage",
   Incidents: "dashboard.read", Staff: "staff.manage", Settings: "settings.manage",
+  Disputes: "support.manage", Documents: "verification.manage", Reconciliation: "payments.read",
+  "System Health": "dashboard.read", Reports: "reports.export",
 };
 type AdminLoginResult =
   | { token: string; user: SessionUser; expiresIn: number }
@@ -127,6 +139,8 @@ function AdminContent({ section, data, refresh }: { section: Section; data: unkn
   if (section === "Overview") return <Overview data={data}/>;
   if (section === "Live Map") return <LiveDeliveryMap data={data} refresh={refresh}/>;
   if (section === "Settings") return <SettingsPanel data={data} refresh={refresh}/>;
+  if (section === "System Health") return <SystemHealth data={data} refresh={refresh}/>;
+  if (section === "Reports") return <ReportsPanel/>;
   const rows = Array.isArray(data) ? data : data && typeof data === "object" ? Object.values(data as Record<string, unknown>).find(Array.isArray) as unknown[] || [] : [];
   return <section className="data-card"><div className="card-head"><div><h2>{section} management</h2><p>{rows.length} records returned by the live API</p></div><button className="refresh" onClick={() => void refresh()}>Refresh</button></div>{rows.length ? <div className="table-wrap"><table><thead><tr><th>Name / ID</th><th>Status / Role</th><th>Contact / Detail</th><th>Created</th><th>Action</th></tr></thead><tbody>{rows.slice(0,100).map((raw, index) => <AdminRow key={String((raw as Record<string, unknown>).id || index)} section={section} row={raw as Record<string, unknown>} refresh={refresh}/>)}</tbody></table></div> : <div className="empty"><b>No {section.toLowerCase()} found</b><p>New records will appear here automatically.</p></div>}</section>;
 }
@@ -148,7 +162,8 @@ function LiveDeliveryMap({ data, refresh }: { data: unknown; refresh: () => Prom
     const dropoffUrl = mapUrl(delivery.dropoffLatitude, delivery.dropoffLongitude, delivery.dropoffAddress);
     const updatedAt = position?.createdAt ? new Date(String(position.createdAt)) : null;
     const stale = !updatedAt || Date.now() - updatedAt.getTime() > 60_000;
-    return <article key={id} className="delivery-map-card"><div className="map-preview"><span className={stale ? "map-pin stale" : "map-pin"}>●</span><b>{position ? stale ? "Last known rider position" : "Rider location live" : "Waiting for rider GPS"}</b><small>{position ? `${Number(position.latitude).toFixed(5)}, ${Number(position.longitude).toFixed(5)}` : String(delivery.pickupAddress || "Pickup location")}</small></div><div className="map-card-body"><div><span className="pill">{String(delivery.status || "unknown").replace(/_/g, " ")}</span><small>Delivery {id.slice(0, 8).toUpperCase()}</small></div><p><b>Pickup:</b> {String(delivery.pickupAddress || "Not supplied")}</p><p><b>Drop-off:</b> {String(delivery.dropoffAddress || "Not supplied")}</p>{updatedAt && <p className={stale ? "stale-text" : "live-text"}>{stale ? "Offline / delayed" : "Updated live"} · {updatedAt.toLocaleTimeString()}</p>}<div className="map-links">{currentUrl && <a href={currentUrl} target="_blank" rel="noreferrer">Open rider map</a>}{dropoffUrl && <a href={dropoffUrl} target="_blank" rel="noreferrer">Open drop-off</a>}</div></div></article>;
+    const embedUrl = position && typeof position.latitude === "number" && typeof position.longitude === "number" ? `https://www.google.com/maps?q=${position.latitude},${position.longitude}&z=15&output=embed` : null;
+    return <article key={id} className="delivery-map-card"><div className="map-preview">{embedUrl ? <iframe title={`Rider location ${id}`} src={embedUrl} loading="lazy" referrerPolicy="no-referrer"/> : <><span className={stale ? "map-pin stale" : "map-pin"}>●</span><b>Waiting for rider GPS</b><small>{String(delivery.pickupAddress || "Pickup location")}</small></>}</div><div className="map-card-body"><div><span className="pill">{String(delivery.status || "unknown").replace(/_/g, " ")}</span><small>Delivery {id.slice(0, 8).toUpperCase()}</small></div><p><b>Pickup:</b> {String(delivery.pickupAddress || "Not supplied")}</p><p><b>Drop-off:</b> {String(delivery.dropoffAddress || "Not supplied")}</p>{updatedAt && <p className={stale ? "stale-text" : "live-text"}>{stale ? "Offline / delayed" : "Updated live"} · {updatedAt.toLocaleTimeString()}</p>}<div className="map-links">{currentUrl && <a href={currentUrl} target="_blank" rel="noreferrer">Open rider map</a>}{dropoffUrl && <a href={dropoffUrl} target="_blank" rel="noreferrer">Open drop-off</a>}</div></div></article>;
   })}</div> : <div className="empty"><b>No active deliveries</b><p>Assigned and in-transit deliveries will appear here.</p></div>}</section>;
 }
 
@@ -157,9 +172,9 @@ function AdminRow({ section, row, refresh }: { section: Section; row: Record<str
   const nestedUser = row.user && typeof row.user === "object" ? row.user as Record<string, unknown> : null;
   const nestedCustomer = row.customer && typeof row.customer === "object" ? row.customer as Record<string, unknown> : null;
   const id = String(row.id || row.userId || "");
-  const name = String(row.name || row.storeName || row.displayName || nestedUser?.name || nestedCustomer?.name || row.subject || row.action || id || "Record");
-  const detail = String(row.email || row.phone || nestedUser?.email || nestedCustomer?.email || row.total || row.amount || row.eventType || row.entityType || "—");
-  const status = String(row.status || row.role || row.verificationStatus || row.paymentStatus || "active");
+  const name = String(row.name || row.ownerName || row.documentName || row.caseNumber || row.storeName || row.displayName || nestedUser?.name || nestedCustomer?.name || row.subject || row.action || id || "Record");
+  const detail = String(row.email || row.ownerEmail || row.phone || row.issues || nestedUser?.email || nestedCustomer?.email || row.total || row.amount || row.eventType || row.entityType || "—");
+  const status = String(row.reconciliationStatus || row.status || row.role || row.verificationStatus || row.paymentStatus || "active");
   const run = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
     try { await api.request(path, { method: "PUT", body: JSON.stringify(body) }); await refresh(); }
@@ -215,8 +230,44 @@ function AdminRow({ section, row, refresh }: { section: Section; row: Record<str
       const currentPassword = window.prompt("Re-enter your administrator password");
       if (department && currentPassword) void run(`/api/admin/staff/${id}`, { staffRole, department, status: String(row.staffStatus || "active"), permissions: [], currentPassword });
     }}>Edit access</button></div>;
+  } else if (section === "Disputes") {
+    actions = <div className="row-actions"><button disabled={busy} onClick={() => void run(`/api/admin/disputes/${id}`, { status: "investigating" })}>Investigate</button><button disabled={busy || ["resolved", "closed"].includes(status)} onClick={() => {
+      const resolution = window.prompt("Resolution details (at least 10 characters)");
+      const resolutionType = resolution && window.prompt("Type: no_action, replacement, partial_refund, full_refund, account_action, or other", "other");
+      if (resolution && resolution.length >= 10 && resolutionType) void run(`/api/admin/disputes/${id}`, { status: "resolved", resolution, resolutionType });
+    }}>Resolve</button></div>;
+  } else if (section === "Documents") {
+    const documentUrl = safeDocumentUrl(row.documentUrl);
+    actions = <div className="row-actions"><button disabled={!documentUrl} onClick={() => window.open(documentUrl, "_blank", "noopener,noreferrer")}>View</button><button disabled={busy || !documentUrl} onClick={() => {
+      const note = window.prompt("Approval note", "Document verified");
+      if (note) void run("/api/admin/verifications/documents/review", { userId: row.userId, profileType: row.profileType, documentName: row.documentName, documentType: row.documentType, documentUrl, status: "verified", note });
+    }}>Approve</button><button className="danger" disabled={busy} onClick={() => {
+      const note = window.prompt("Why is a replacement required?");
+      if (note) void run("/api/admin/verifications/documents/review", { userId: row.userId, profileType: row.profileType, documentName: row.documentName, documentType: row.documentType, documentUrl, status: "replacement_requested", note });
+    }}>Replace</button></div>;
   }
   return <tr><td><b>{name}</b><small>{id.slice(0, 12)}</small></td><td><span className="pill">{status.replace(/_/g, " ")}</span></td><td>{detail}</td><td>{row.createdAt ? new Date(String(row.createdAt)).toLocaleDateString() : "—"}</td><td>{actions}</td></tr>;
+}
+
+function SystemHealth({ data, refresh }: { data: unknown; refresh: () => Promise<void> }) {
+  const payload = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const integrations = payload.integrations && typeof payload.integrations === "object" ? payload.integrations as Record<string, Record<string, unknown>> : {};
+  return <section className="data-card"><div className="card-head"><div><h2>System and integration health</h2><p>Secrets are never displayed—only configuration readiness.</p></div><button className="refresh" onClick={() => void refresh()}>Run health check</button></div><div className="health-grid"><article><b>API</b><span className="pill">{String(payload.api || "unknown")}</span></article><article><b>Database</b><span className="pill">{String(payload.database || "unknown")}</span><small>{String(payload.databaseLatencyMs || 0)} ms</small></article>{Object.entries(integrations).map(([name, item]) => <article key={name}><b>{name}</b><span className="pill">{item.configured ? "configured" : "setup required"}</span>{"enabled" in item && <small>{item.enabled ? "Enabled" : "Disabled"}</small>}</article>)}</div></section>;
+}
+
+function ReportsPanel() {
+  const [busy, setBusy] = useState("");
+  const download = async (report: string) => {
+    setBusy(report);
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/reports/${report}`, { headers: { Authorization: `Bearer ${store.get()}`, "X-MansaMart-App": "admin" } });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || "Report failed");
+      const blob = await response.blob(); const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = `mansamart-${report}.csv`; anchor.click(); URL.revokeObjectURL(url);
+    } catch (error) { window.alert(error instanceof Error ? error.message : "Report download failed"); }
+    finally { setBusy(""); }
+  };
+  return <section className="data-card"><div className="card-head"><div><h2>Operational reports</h2><p>Downloads are permission-protected and contain live server data.</p></div></div><div className="report-grid">{["orders", "payments", "users"].map((report) => <article key={report}><b>{report[0].toUpperCase() + report.slice(1)} report</b><p>Export up to 10,000 recent records as a UTF-8 CSV file.</p><button className="refresh" disabled={busy === report} onClick={() => void download(report)}>{busy === report ? "Preparing…" : "Download CSV"}</button></article>)}</div></section>;
 }
 
 function SettingsPanel({ data, refresh }: { data: unknown; refresh: () => Promise<void> }) {
@@ -243,11 +294,13 @@ function SettingsPanel({ data, refresh }: { data: unknown; refresh: () => Promis
 }
 
 function Overview({ data }: { data: unknown }) {
-  const stats = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const payload = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const stats = payload.metrics && typeof payload.metrics === "object" ? payload.metrics as Record<string, unknown> : payload;
+  const alerts = Array.isArray(payload.alerts) ? payload.alerts as Record<string, unknown>[] : [];
   const cards = useMemo(() => [
     ["Total users", stats.totalUsers ?? stats.users ?? 0], ["Active vendors", stats.totalVendors ?? stats.vendors ?? 0], ["Orders", stats.totalOrders ?? stats.orders ?? 0], ["Service bookings", stats.totalBookings ?? stats.bookings ?? 0]
   ], [data]);
-  return <><section className="metrics">{cards.map(([label,value], index) => <article key={String(label)}><div><span>{index + 1}</span><small>LIVE</small></div><h3>{Number(value || 0).toLocaleString()}</h3><p>{String(label)}</p></article>)}</section><section className="overview-grid"><article className="data-card"><p className="kicker">OPERATIONS</p><h2>Marketplace health</h2><div className="health-row"><span>API connection</span><b>Operational</b></div><div className="health-row"><span>Administrator session</span><b>Protected</b></div><div className="health-row"><span>Role isolation</span><b>Enabled</b></div></article><article className="data-card dark"><p className="kicker">SECURITY</p><h2>Admin access is isolated</h2><p>Administrator accounts are rejected by the general MansaMart website and all mobile applications.</p><b>admin.mansamart.gm only</b></article></section></>;
+  return <><section className="metrics">{cards.map(([label,value], index) => <article key={String(label)}><div><span>{index + 1}</span><small>LIVE</small></div><h3>{Number(value || 0).toLocaleString()}</h3><p>{String(label)}</p></article>)}</section><section className="overview-grid"><article className="data-card"><p className="kicker">OPERATIONS</p><h2>Action centre</h2>{alerts.length ? alerts.slice(0, 8).map((alert) => <div className="health-row" key={`${alert.type}-${alert.id}`}><span>{String(alert.title)}</span><b>{String(alert.severity)}</b></div>) : <div className="health-row"><span>No urgent operational alerts</span><b>Clear</b></div>}</article><article className="data-card dark"><p className="kicker">SECURITY</p><h2>Admin access is isolated</h2><p>Administrator accounts are rejected by the general MansaMart website and all mobile applications.</p><b>admin.mansamart.gm only</b></article></section></>;
 }
 
 createRoot(document.getElementById("root")!).render(<React.StrictMode><AdminApp/></React.StrictMode>);

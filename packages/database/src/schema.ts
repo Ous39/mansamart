@@ -739,13 +739,71 @@ export const supportTickets = pgTable("support_tickets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
   assignedStaffId: varchar("assigned_staff_id").references(() => staff.id, { onDelete: "set null" }),
+  assignedAdminId: varchar("assigned_admin_id").references(() => users.id, { onDelete: "set null" }),
   subject: text("subject").notNull(),
   message: text("message").notNull(),
   priority: text("priority").notNull().default("normal"),
   status: text("status").notNull().default("open"),
+  firstResponseAt: timestamp("first_response_at"),
+  resolvedAt: timestamp("resolved_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+export const supportTicketNotes = pgTable("support_ticket_notes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").references(() => users.id, { onDelete: "set null" }),
+  body: text("body").notNull(),
+  visibility: text("visibility").notNull().default("internal"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const disputeCases = pgTable("dispute_cases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  caseNumber: text("case_number").notNull().unique(),
+  openedBy: varchar("opened_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").references(() => orders.id, { onDelete: "set null" }),
+  bookingId: varchar("booking_id").references(() => bookings.id, { onDelete: "set null" }),
+  category: text("category").notNull(),
+  priority: text("priority").notNull().default("normal"),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  evidence: jsonb("evidence").$type<{ name: string; url: string; type?: string }[]>().notNull().default([]),
+  status: text("status").notNull().default("open"),
+  assignedAdminId: varchar("assigned_admin_id").references(() => users.id, { onDelete: "set null" }),
+  resolution: text("resolution"),
+  resolutionType: text("resolution_type"),
+  dueAt: timestamp("due_at"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const disputeMessages = pgTable("dispute_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  disputeId: varchar("dispute_id").notNull().references(() => disputeCases.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").references(() => users.id, { onDelete: "set null" }),
+  body: text("body").notNull(),
+  internal: boolean("internal").notNull().default(false),
+  attachments: jsonb("attachments").$type<{ name: string; url: string; type?: string }[]>().notNull().default([]),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const verificationDocumentReviews = pgTable("verification_document_reviews", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  profileType: text("profile_type").notNull(),
+  documentName: text("document_name").notNull(),
+  documentType: text("document_type").notNull(),
+  documentUrl: text("document_url").notNull(),
+  status: text("status").notNull().default("submitted"),
+  note: text("note"),
+  reviewedBy: varchar("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [uniqueIndex("idx_verification_document_unique").on(table.userId, table.profileType, table.documentName)]);
 
 export const returnRequests = pgTable("return_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1180,6 +1238,10 @@ export type AdminAccessProfile = typeof adminAccessProfiles.$inferSelect;
 export type PlatformSetting = typeof platformSettings.$inferSelect;
 export type OperationalIncident = typeof operationalIncidents.$inferSelect;
 export type SupportTicket = typeof supportTickets.$inferSelect;
+export type SupportTicketNote = typeof supportTicketNotes.$inferSelect;
+export type DisputeCase = typeof disputeCases.$inferSelect;
+export type DisputeMessage = typeof disputeMessages.$inferSelect;
+export type VerificationDocumentReview = typeof verificationDocumentReviews.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type ProductVariant = typeof productVariants.$inferSelect;

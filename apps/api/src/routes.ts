@@ -12,7 +12,8 @@ import {
   wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
   orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, auditLogs, orderVendorFulfillments, passwordResetTokens, adminMfaChallenges,
   authIdentities, phoneOtpChallenges, externalAuthTokens, pushDevices, notificationPreferences, notificationDeliveries,
-  adminAccessProfiles, platformSettings, operationalIncidents,
+  adminAccessProfiles, platformSettings, operationalIncidents, supportTicketNotes, disputeCases, disputeMessages,
+  verificationDocumentReviews, paymentAttempts, paymentRefunds, paymentWebhookEvents,
 } from "@mansamart/database/schema";
 import { eq, and, desc, ilike, or, inArray, ne, gt, count, sql, isNull } from "drizzle-orm";
 import {
@@ -31,6 +32,7 @@ import { generatePhoneOtp, hashPhoneOtp, normalizeGambianPhone, phoneOtpCanExpos
 import { isPhoneOtpConfigured, sendPhoneOtp } from "./sms";
 import { identityTokenHash, verifyIdentityToken } from "./identity-providers";
 import { ADMIN_PERMISSIONS, ADMIN_STAFF_ROLES, hasAdminPermission, isSafePlatformSettingValue, permissionsForRole, type AdminPermission, type AdminStaffRole } from "./admin-control";
+import { disputeResolutionIsComplete, isSafeEvidenceUrl, reconciliationIssues, safeCsvValue } from "./admin-operations";
 import { createOrchestratedNotification } from "./notification-service";
 import { isExpoPushToken } from "./push-rules";
 import { BOOKING_STATUSES, canUpdateBookingStatus, hasVerifiedReviewHistory, isOrderReturnEligible, normalizeCartSelection } from "./customer-rules";
@@ -65,6 +67,17 @@ function clientAudience(req: Request): ClientAudience | null {
 
 function roleAllowedForClient(req: Request, role: string): boolean {
   return roleAllowedForAudience(clientAudience(req), role);
+}
+
+function csvCell(value: unknown): string {
+  return safeCsvValue(value);
+}
+
+function sendCsv(res: Response, filename: string, headers: string[], rows: unknown[][]) {
+  const output = [headers.map(csvCell).join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\r\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  return res.send(`\uFEFF${output}`);
 }
 
 function requireAdminPermission(permission: AdminPermission) {
@@ -432,6 +445,11 @@ async function notifyUser(userId: string | null | undefined, type: string, title
   const entityId = data.orderId || data.bookingId || data.ticketId || data.deliveryId;
   const notification = await createOrchestratedNotification({ userId, type, title, body, actionRoute, data, entityType, entityId }).catch(() => null);
   emitRealtime("notification:new", { notification, data: { ...data, actionRoute, type } }, [`user:${userId}`]);
+}
+
+async function notifyAdminUsers(type: string, title: string, body: string, actionRoute?: string, data: Record<string, any> = {}) {
+  const admins = await db.select({ id: users.id }).from(users).where(and(eq(users.role, "admin"), eq(users.accountStatus, "active"))).limit(100);
+  await Promise.all(admins.map((admin) => notifyUser(admin.id, type, title, body, actionRoute, data)));
 }
 
 async function audit(actorId: string | null | undefined, action: string, entityType: string, entityId?: string, metadata: Record<string, any> = {}) {
@@ -2175,6 +2193,202 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  app.get("/api/admin/dashboard", requireAuth, requireRole("admin"), requireAdminPermission("dashboard.read"), async (_req: Request, res: Response) => {
+    const [allUsers, allOrders, allBookings, tickets, returns, disputes, incidents, payments, deliveriesNow] = await Promise.all([
+      db.select().from(users), db.select().from(orders), db.select().from(bookings), db.select().from(supportTickets),
+      db.select().from(returnRequests), db.select().from(disputeCases), db.select().from(operationalIncidents),
+      db.select().from(paymentAttempts), db.select().from(deliveries),
+    ]);
+    const now = Date.now();
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const activeDeliveryStatuses = new Set(["searching", "assigned", "picked_up", "in_transit"]);
+    const alerts = [
+      ...deliveriesNow.filter((row) => activeDeliveryStatuses.has(row.status) && now - row.updatedAt.getTime() > 45 * 60_000).map((row) => ({ type: "delivery_delayed", severity: "high", id: row.id, title: `Delivery ${row.id.slice(0, 8)} has not updated for 45 minutes` })),
+      ...payments.filter((row) => ["failed", "requires_refund"].includes(row.status)).slice(0, 20).map((row) => ({ type: "payment_attention", severity: row.status === "requires_refund" ? "critical" : "medium", id: row.id, title: `Payment ${row.status.replace(/_/g, " ")}` })),
+      ...disputes.filter((row) => !["resolved", "closed"].includes(row.status) && row.dueAt && row.dueAt.getTime() < now).map((row) => ({ type: "dispute_overdue", severity: "high", id: row.id, title: `${row.caseNumber} is overdue` })),
+      ...incidents.filter((row) => row.status === "open" && ["high", "critical"].includes(row.severity)).map((row) => ({ type: "incident", severity: row.severity, id: row.id, title: row.title })),
+    ].slice(0, 50);
+    return res.json({
+      metrics: {
+        users: allUsers.length, vendors: allUsers.filter((row) => row.role === "vendor").length,
+        ordersToday: allOrders.filter((row) => row.createdAt >= todayStart).length,
+        revenueToday: allOrders.filter((row) => row.createdAt >= todayStart && !["cancelled", "refunded"].includes(row.status)).reduce((sum, row) => sum + row.total, 0),
+        activeDeliveries: deliveriesNow.filter((row) => activeDeliveryStatuses.has(row.status)).length,
+        pendingVerifications: allUsers.filter((row) => row.verificationStatus === "pending").length,
+        openSupport: tickets.filter((row) => !["resolved", "closed"].includes(row.status)).length,
+        openDisputes: disputes.filter((row) => !["resolved", "closed"].includes(row.status)).length,
+        pendingReturns: returns.filter((row) => ["submitted", "reviewing", "approved"].includes(row.status)).length,
+        failedPayments: payments.filter((row) => row.status === "failed").length,
+        bookings: allBookings.length,
+      },
+      alerts,
+    });
+  });
+
+  app.get("/api/admin/system-health", requireAuth, requireRole("admin"), requireAdminPermission("dashboard.read"), async (_req: Request, res: Response) => {
+    const started = Date.now();
+    let database = "operational";
+    try { await db.execute(sql`SELECT 1`); } catch { database = "unavailable"; }
+    const configured = (keys: string[]) => keys.every((key) => !!process.env[key]);
+    return res.json({
+      checkedAt: new Date().toISOString(), api: "operational", database, databaseLatencyMs: Date.now() - started,
+      integrations: {
+        wave: { configured: process.env.WAVE_ENABLED === "true" && configured(["WAVE_API_KEY", "WAVE_WEBHOOK_SECRET"]), enabled: process.env.WAVE_ENABLED === "true" },
+        whatsapp: { configured: configured(["WHATSAPP_SYSTEM_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"]), enabled: process.env.WHATSAPP_ENABLED === "true" },
+        email: { configured: configured(["SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD"]) },
+        maps: { configured: configured(["GOOGLE_MAPS_API_KEY"]) },
+        push: { configured: true },
+      },
+    });
+  });
+
+  app.get("/api/admin/finance/reconciliation", requireAuth, requireRole("admin"), requireAdminPermission("payments.read"), async (_req: Request, res: Response) => {
+    const [payments, orderRows, refunds, webhookRows] = await Promise.all([
+      db.select().from(paymentAttempts).orderBy(desc(paymentAttempts.createdAt)).limit(500),
+      db.select().from(orders).orderBy(desc(orders.createdAt)).limit(500),
+      db.select().from(paymentRefunds).orderBy(desc(paymentRefunds.createdAt)).limit(500),
+      db.select().from(paymentWebhookEvents).orderBy(desc(paymentWebhookEvents.receivedAt)).limit(500),
+    ]);
+    const orderById = new Map(orderRows.map((row) => [row.id, row]));
+    const refundByPayment = new Map(refunds.map((row) => [row.paymentAttemptId, row]));
+    const rows = payments.map((payment) => {
+      const order = orderById.get(payment.orderId); const refund = refundByPayment.get(payment.id);
+      const issues = reconciliationIssues({ paymentStatus: payment.status, paymentAmount: payment.amount, orderStatus: order?.status, orderTotal: order?.total, refundStatus: refund?.status });
+      return { ...payment, orderStatus: order?.status || "missing", orderTotal: order?.total, refundStatus: refund?.status, reconciliationStatus: issues.length ? "attention" : "matched", issues };
+    });
+    return res.json({ rows, summary: { total: rows.length, matched: rows.filter((row) => row.reconciliationStatus === "matched").length, attention: rows.filter((row) => row.reconciliationStatus === "attention").length, failedWebhooks: webhookRows.filter((row) => row.status === "failed").length } });
+  });
+
+  app.get("/api/admin/reports/:report", requireAuth, requireRole("admin"), requireAdminPermission("reports.export"), async (req: Request, res: Response) => {
+    const admin = (req as any).user as typeof users.$inferSelect;
+    const report = param(req, "report");
+    if (report === "orders") {
+      const rows = await db.select().from(orders).orderBy(desc(orders.createdAt)).limit(10_000);
+      await audit(admin.id, "admin.report_exported", "report", report, { rowCount: rows.length });
+      return sendCsv(res, "mansamart-orders.csv", ["id", "customer_id", "status", "total", "delivery_fee", "created_at"], rows.map((row) => [row.id, row.userId, row.status, row.total, row.shipping, row.createdAt]));
+    }
+    if (report === "payments") {
+      const rows = await db.select().from(paymentAttempts).orderBy(desc(paymentAttempts.createdAt)).limit(10_000);
+      await audit(admin.id, "admin.report_exported", "report", report, { rowCount: rows.length });
+      return sendCsv(res, "mansamart-payments.csv", ["id", "order_id", "provider", "status", "amount", "currency", "reference", "created_at"], rows.map((row) => [row.id, row.orderId, row.provider, row.status, row.amount, row.currency, row.clientReference, row.createdAt]));
+    }
+    if (report === "users") {
+      const rows = await db.select().from(users).orderBy(desc(users.createdAt)).limit(10_000);
+      await audit(admin.id, "admin.report_exported", "report", report, { rowCount: rows.length });
+      return sendCsv(res, "mansamart-users.csv", ["id", "name", "email", "phone", "role", "account_status", "verification_status", "created_at"], rows.map((row) => [row.id, row.name, row.email, row.phone, row.role, row.accountStatus, row.verificationStatus, row.createdAt]));
+    }
+    return res.status(404).json({ message: "Report not found" });
+  });
+
+  app.get("/api/admin/verifications/documents", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (_req: Request, res: Response) => {
+    const [people, vendors, providers, riders, reviews] = await Promise.all([
+      db.select().from(users), db.select().from(vendorProfiles), db.select().from(providerProfiles), db.select().from(deliveryRiders), db.select().from(verificationDocumentReviews),
+    ]);
+    const reviewKey = (userId: string, profileType: string, name: string) => `${userId}:${profileType}:${name}`;
+    const reviewByKey = new Map(reviews.map((row) => [reviewKey(row.userId, row.profileType, row.documentName), row]));
+    const userById = new Map(people.map((row) => [row.id, row]));
+    const output: Record<string, unknown>[] = [];
+    const add = (userId: string, profileType: string, docs: unknown) => {
+      if (!Array.isArray(docs)) return;
+      const owner = userById.get(userId);
+      docs.forEach((document) => {
+        if (!document || typeof document !== "object") return;
+        const item = document as Record<string, unknown>; const name = String(item.name || item.type || "Document");
+        const review = reviewByKey.get(reviewKey(userId, profileType, name));
+        output.push({ id: review?.id || reviewKey(userId, profileType, name), userId, ownerName: owner?.name, ownerEmail: owner?.email, profileType, documentName: name, documentType: String(item.type || "document"), documentUrl: String(item.url || ""), uploadedAt: item.uploadedAt, status: review?.status || item.status || "submitted", note: review?.note, reviewedAt: review?.reviewedAt });
+      });
+    };
+    people.forEach((row) => add(row.id, "personal", row.personalDocuments));
+    vendors.forEach((row) => add(row.userId, "vendor", row.documents));
+    providers.forEach((row) => add(row.userId, "provider", row.documents));
+    riders.forEach((row) => add(row.userId, "rider", row.documents));
+    return res.json(output.sort((a, b) => String(b.uploadedAt || "").localeCompare(String(a.uploadedAt || ""))));
+  });
+
+  app.put("/api/admin/verifications/documents/review", requireAuth, requireRole("admin"), requireAdminPermission("verification.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const body = z.object({ userId: z.string().uuid(), profileType: z.enum(["personal", "vendor", "provider", "rider"]), documentName: z.string().trim().min(1).max(200), documentType: z.string().trim().min(1).max(100), documentUrl: z.string().trim().min(1).max(2000).refine(isSafeEvidenceUrl, "Unsafe document URL"), status: z.enum(["verified", "rejected", "replacement_requested"]), note: z.string().trim().min(3).max(1000) }).parse(req.body);
+      const [review] = await db.insert(verificationDocumentReviews).values({ ...body, reviewedBy: admin.id, reviewedAt: new Date(), updatedAt: new Date() })
+        .onConflictDoUpdate({ target: [verificationDocumentReviews.userId, verificationDocumentReviews.profileType, verificationDocumentReviews.documentName], set: { documentType: body.documentType, documentUrl: body.documentUrl, status: body.status, note: body.note, reviewedBy: admin.id, reviewedAt: new Date(), updatedAt: new Date() } }).returning();
+      await audit(admin.id, `verification.document_${body.status}`, "verification_document", review.id, { userId: body.userId, profileType: body.profileType, documentName: body.documentName, note: body.note });
+      await notifyUser(body.userId, "verification", "Document review updated", `${body.documentName}: ${body.status.replace(/_/g, " ")}. ${body.note}`, "/verification");
+      return res.json(review);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid document review" });
+      return res.status(500).json({ message: "Document review failed" });
+    }
+  });
+
+  app.get("/api/disputes", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
+    const user = (req as any).user as typeof users.$inferSelect;
+    return res.json(await db.select().from(disputeCases).where(eq(disputeCases.openedBy, user.id)).orderBy(desc(disputeCases.createdAt)).limit(100));
+  });
+
+  app.post("/api/disputes", requireAuth, requireRole("user", "vendor", "service_provider", "delivery_rider"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as typeof users.$inferSelect;
+      const body = z.object({ orderId: z.string().uuid().optional(), bookingId: z.string().uuid().optional(), category: z.enum(["order", "delivery", "payment", "refund", "service", "safety", "other"]), priority: z.enum(["normal", "high"]).default("normal"), title: z.string().trim().min(5).max(180), description: z.string().trim().min(20).max(5000), evidence: z.array(z.object({ name: z.string().trim().min(1).max(200), url: z.string().trim().min(1).max(2000).refine(isSafeEvidenceUrl, "Unsafe evidence URL"), type: z.string().trim().max(100).optional() })).max(10).default([]) }).parse(req.body);
+      if (!body.orderId && !body.bookingId) return res.status(400).json({ message: "Choose an order or booking" });
+      if (body.orderId) {
+        const [order] = await db.select().from(orders).where(eq(orders.id, body.orderId)).limit(1);
+        const isParty = order && (order.userId === user.id || order.riderId === user.id || order.items.some((item) => item.vendorId === user.id));
+        if (!isParty) return res.status(403).json({ message: "You can dispute only an order you participated in" });
+      }
+      if (body.bookingId) {
+        const [booking] = await db.select().from(bookings).where(eq(bookings.id, body.bookingId)).limit(1);
+        if (!booking || (booking.userId !== user.id && booking.providerId !== user.id)) return res.status(403).json({ message: "You can dispute only a booking you participated in" });
+      }
+      const caseNumber = `MM-${new Date().getUTCFullYear()}-${crypto.randomInt(100000, 1000000)}`;
+      const [created] = await db.insert(disputeCases).values({ ...body, caseNumber, openedBy: user.id, dueAt: new Date(Date.now() + (body.priority === "high" ? 24 : 72) * 60 * 60_000) }).returning();
+      await notifyAdminUsers("support_message", "New dispute opened", `${caseNumber}: ${body.title}`, `/disputes/${created.id}`, { disputeId: created.id });
+      return res.status(201).json(created);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid dispute" });
+      return res.status(500).json({ message: "Dispute could not be opened" });
+    }
+  });
+
+  app.get("/api/admin/disputes", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (_req: Request, res: Response) => {
+    const rows = await db.select({ dispute: disputeCases, user: users }).from(disputeCases).innerJoin(users, eq(disputeCases.openedBy, users.id)).orderBy(desc(disputeCases.createdAt)).limit(300);
+    return res.json(rows.map(({ dispute, user }) => ({ ...dispute, user: safeUser(user) })));
+  });
+
+  app.put("/api/admin/disputes/:id", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const body = z.object({ status: z.enum(["open", "investigating", "awaiting_customer", "awaiting_business", "resolved", "closed"]), priority: z.enum(["normal", "high", "critical"]).optional(), resolution: z.string().trim().max(5000).optional(), resolutionType: z.enum(["no_action", "replacement", "partial_refund", "full_refund", "account_action", "other"]).optional() }).parse(req.body);
+      if (!disputeResolutionIsComplete(body.status, body.resolution, body.resolutionType)) return res.status(400).json({ message: "Resolution details and type are required" });
+      const [updated] = await db.update(disputeCases).set({ ...body, assignedAdminId: admin.id, resolvedAt: ["resolved", "closed"].includes(body.status) ? new Date() : null, updatedAt: new Date() }).where(eq(disputeCases.id, param(req, "id"))).returning();
+      if (!updated) return res.status(404).json({ message: "Dispute not found" });
+      await audit(admin.id, `dispute.${body.status}`, "dispute", updated.id, { resolutionType: body.resolutionType, priority: body.priority });
+      await notifyUser(updated.openedBy, "support", "Dispute updated", `${updated.caseNumber} is now ${body.status.replace(/_/g, " ")}.`, "/disputes", { disputeId: updated.id });
+      return res.json(updated);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid dispute update" });
+      return res.status(500).json({ message: "Dispute update failed" });
+    }
+  });
+
+  app.get("/api/admin/disputes/:id/messages", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (req: Request, res: Response) => {
+    return res.json(await db.select().from(disputeMessages).where(eq(disputeMessages.disputeId, param(req, "id"))).orderBy(disputeMessages.createdAt));
+  });
+
+  app.post("/api/admin/disputes/:id/messages", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const body = z.object({ body: z.string().trim().min(3).max(5000), internal: z.boolean().default(true), attachments: z.array(z.object({ name: z.string().trim().min(1).max(200), url: z.string().trim().min(1).max(2000).refine(isSafeEvidenceUrl, "Unsafe attachment URL"), type: z.string().trim().max(100).optional() })).max(10).default([]) }).parse(req.body);
+      const [dispute] = await db.select().from(disputeCases).where(eq(disputeCases.id, param(req, "id"))).limit(1);
+      if (!dispute) return res.status(404).json({ message: "Dispute not found" });
+      const [message] = await db.insert(disputeMessages).values({ disputeId: dispute.id, authorId: admin.id, ...body }).returning();
+      if (!body.internal) await notifyUser(dispute.openedBy, "support", "New dispute response", body.body.slice(0, 200), "/disputes", { disputeId: dispute.id });
+      return res.status(201).json(message);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Invalid dispute message" });
+      return res.status(500).json({ message: "Dispute message failed" });
+    }
+  });
+
   app.get("/api/admin/access/me", requireAuth, requireRole("admin"), async (req: Request, res: Response) => {
     const admin = (req as any).user as typeof users.$inferSelect;
     const [profile] = await db.select().from(adminAccessProfiles).where(eq(adminAccessProfiles.userId, admin.id)).limit(1);
@@ -3804,7 +4018,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const admin = (req as any).user;
       const { status } = z.object({ status: z.enum(["open", "in_progress", "resolved", "closed"]) }).parse(req.body);
-      const [ticket] = await db.update(supportTickets).set({ status, updatedAt: new Date() }).where(eq(supportTickets.id, param(req, "id"))).returning();
+      const [current] = await db.select().from(supportTickets).where(eq(supportTickets.id, param(req, "id"))).limit(1);
+      if (!current) return res.status(404).json({ message: "Support ticket not found" });
+      const [ticket] = await db.update(supportTickets).set({ status, assignedAdminId: admin.id, firstResponseAt: current.firstResponseAt || new Date(), resolvedAt: ["resolved", "closed"].includes(status) ? new Date() : null, updatedAt: new Date() }).where(eq(supportTickets.id, current.id)).returning();
       if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
       await audit(admin.id, `support.${status}`, "support_ticket", ticket.id);
       if (ticket.userId) await notifyUser(ticket.userId, "support", "Support ticket updated", `Your support ticket is now ${status.replace(/_/g, " ")}.`, "/support", { ticketId: ticket.id });
@@ -3812,6 +4028,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       if (error.name === "ZodError") return res.status(400).json({ message: "Invalid support status" });
       return res.status(500).json({ message: "Support ticket update failed" });
+    }
+  });
+
+  app.get("/api/admin/support/tickets/:id/notes", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (req: Request, res: Response) => {
+    return res.json(await db.select().from(supportTicketNotes).where(eq(supportTicketNotes.ticketId, param(req, "id"))).orderBy(supportTicketNotes.createdAt));
+  });
+
+  app.post("/api/admin/support/tickets/:id/notes", requireAuth, requireRole("admin"), requireAdminPermission("support.manage"), async (req: Request, res: Response) => {
+    try {
+      const admin = (req as any).user as typeof users.$inferSelect;
+      const { body, visibility } = z.object({ body: z.string().trim().min(3).max(4000), visibility: z.enum(["internal", "customer"]).default("internal") }).parse(req.body);
+      const [ticket] = await db.select().from(supportTickets).where(eq(supportTickets.id, param(req, "id"))).limit(1);
+      if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
+      const [note] = await db.insert(supportTicketNotes).values({ ticketId: ticket.id, authorId: admin.id, body, visibility }).returning();
+      await db.update(supportTickets).set({ assignedAdminId: admin.id, firstResponseAt: ticket.firstResponseAt || new Date(), status: ticket.status === "open" ? "in_progress" : ticket.status, updatedAt: new Date() }).where(eq(supportTickets.id, ticket.id));
+      if (visibility === "customer" && ticket.userId) await notifyUser(ticket.userId, "support", "Support replied", body.slice(0, 200), "/support", { ticketId: ticket.id });
+      await audit(admin.id, "support.note_added", "support_ticket", ticket.id, { visibility });
+      return res.status(201).json(note);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Invalid support note" });
+      return res.status(500).json({ message: "Support note could not be added" });
     }
   });
 
