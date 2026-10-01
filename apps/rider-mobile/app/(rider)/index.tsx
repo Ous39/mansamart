@@ -65,9 +65,10 @@ export default function RiderDashboard() {
         </View>
 
         <View style={styles.metrics}>
-          <Metric icon="checkmark-done-outline" label="Completed" value={String(data?.metrics?.completed ?? 0)} />
+          <Metric icon="checkmark-done-outline" label="Today" value={String(data?.metrics?.todayCompleted ?? 0)} />
           <Metric icon="star-outline" label="Rating" value={Number(data?.metrics?.rating || 0).toFixed(1)} />
-          <Metric icon="cash-outline" label="Earned" value={money(data?.totalEarnings)} />
+          <Metric icon="cash-outline" label="Today earned" value={money(data?.metrics?.todayEarnings)} />
+          <Metric icon="analytics-outline" label="Acceptance" value={`${Number(data?.metrics?.acceptanceRate ?? 100)}%`} />
         </View>
 
         <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Current work</Text><Pressable onPress={() => router.push("/(rider)/deliveries" as any)}><Text style={styles.link}>See all</Text></Pressable></View>
@@ -89,6 +90,7 @@ export default function RiderDashboard() {
           <Quick icon="scan-outline" label="Verify QR" onPress={() => router.push("/scan-order")} />
           <Quick icon="wallet-outline" label="Earnings" onPress={() => router.push("/(rider)/earnings" as any)} />
           <Quick icon="notifications-outline" label="Alerts" onPress={() => router.push("/notifications")} />
+          <Quick icon="shield-checkmark-outline" label="Safety centre" onPress={() => router.push("/safety" as any)} />
           <Quick icon="person-outline" label="Rider profile" onPress={() => router.push("/(rider)/settings")} />
         </View>
       </>}

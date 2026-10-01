@@ -35,6 +35,7 @@ function RootLayoutNav() {
       <Stack.Screen name="notifications" options={{ headerShown: false }} />
       <Stack.Screen name="wallet" options={{ headerShown: false }} />
       <Stack.Screen name="support" options={{ headerShown: false }} />
+      <Stack.Screen name="safety" options={{ headerShown: false }} />
       <Stack.Screen name="pin-setup" options={{ headerShown: false, gestureEnabled: false }} />
       <Stack.Screen name="pin-entry" options={{ headerShown: false, gestureEnabled: false }} />
       <Stack.Screen

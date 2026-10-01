@@ -85,6 +85,8 @@ export default function DeliveryOfferDetailsScreen() {
           <Summary icon="cube-outline" label="Items" value={String(order.items?.reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0) || 0)} />
         </View>
 
+        {String(order.paymentMethod || "").includes("cash") && <View style={styles.cashNotice}><Ionicons name="cash-outline" size={22} color="#92400E" /><Text style={styles.cashText}>Cash order: follow the collection instructions shown after acceptance and never mark a delivery complete without the customer code.</Text></View>}
+
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Delivery route</Text>
           <RouteRow icon="storefront-outline" label="Vendor pickup" value={delivery.pickupAddress || "Vendor location"} color="#E8813A" />
@@ -154,6 +156,7 @@ const styles = StyleSheet.create({
   content: { padding: 18, gap: 14 },
   notice: { flexDirection: "row", gap: 10, padding: 14, borderRadius: 16, backgroundColor: "#EFF6FF", borderWidth: 1, borderColor: "#BFDBFE" },
   noticeText: { flex: 1, fontFamily: "Inter_500Medium", fontSize: 13, lineHeight: 19, color: "#1E3A8A" },
+  cashNotice: { flexDirection: "row", gap: 10, padding: 14, borderRadius: 16, backgroundColor: "#FEF3C7", borderWidth: 1, borderColor: "#FDE68A" }, cashText: { flex: 1, color: "#92400E", fontFamily: "Inter_600SemiBold", fontSize: 12, lineHeight: 18 },
   summaryRow: { flexDirection: "row", gap: 9 },
   summary: { flex: 1, alignItems: "center", backgroundColor: Colors.surface, borderRadius: 16, paddingVertical: 14, paddingHorizontal: 5, borderWidth: 1, borderColor: Colors.borderLight },
   summaryValue: { fontFamily: "Inter_700Bold", color: Colors.text, marginTop: 5, fontSize: 13, textAlign: "center" },

@@ -681,7 +681,22 @@ export const deliveryRequests = pgTable("delivery_requests", {
   status: text("status").notNull().default("offered"), // offered, accepted, expired, cancelled
   expiresAt: timestamp("expires_at"),
   respondedAt: timestamp("responded_at"),
+  declineReason: text("decline_reason"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const riderSafetyIncidents = pgTable("rider_safety_incidents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  riderId: varchar("rider_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  deliveryId: varchar("delivery_id").references(() => deliveries.id, { onDelete: "set null" }),
+  type: text("type").notNull(),
+  severity: text("severity").notNull().default("high"),
+  description: text("description").notNull(),
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  status: text("status").notNull().default("open"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  resolvedAt: timestamp("resolved_at"),
 });
 
 export const staff = pgTable("staff", {
@@ -1233,6 +1248,7 @@ export type Payout = typeof payouts.$inferSelect;
 export type DeliveryRider = typeof deliveryRiders.$inferSelect;
 export type Delivery = typeof deliveries.$inferSelect;
 export type DeliveryRequest = typeof deliveryRequests.$inferSelect;
+export type RiderSafetyIncident = typeof riderSafetyIncidents.$inferSelect;
 export type Staff = typeof staff.$inferSelect;
 export type AdminAccessProfile = typeof adminAccessProfiles.$inferSelect;
 export type PlatformSetting = typeof platformSettings.$inferSelect;

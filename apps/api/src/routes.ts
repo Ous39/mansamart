@@ -9,7 +9,7 @@ import {
   users, sessions, products, services, orders, bookings,
   reviews, reviewHelpfulVotes, cartItems, wishlistItems, notifications,
   userActivity, flashDeals, addresses, shopperProfiles, vendorProfiles, providerProfiles, coupons, banners,
-  wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
+  wallets, transactions, commissions, payouts, deliveryRiders, deliveries, deliveryRequests, riderSafetyIncidents, staff, supportTickets, returnRequests, conversations, messages, productVariants, serviceSlots,
   orderTrackingEvents, orderQrCodes, riderLocations, riderEarnings, escrowTransactions, settlements, profileCompletionChecks, auditLogs, orderVendorFulfillments, passwordResetTokens, adminMfaChallenges,
   authIdentities, phoneOtpChallenges, externalAuthTokens, pushDevices, notificationPreferences, notificationDeliveries,
   adminAccessProfiles, platformSettings, operationalIncidents, supportTicketNotes, disputeCases, disputeMessages,
@@ -3939,10 +3939,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   async function declineDeliveryRequest(req: Request, res: Response) {
     const user = (req as any).user;
+    const parsed = z.object({ reason: z.enum(["too_far", "unsafe_route", "vehicle_issue", "ending_shift", "other"]).default("other") }).safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ message: "Choose a valid decline reason" });
     const [request] = await db.select().from(deliveryRequests)
       .where(and(eq(deliveryRequests.id, param(req, "id")), eq(deliveryRequests.riderId, user.id))).limit(1);
     if (!request || request.status !== "offered") return res.status(404).json({ message: "Delivery offer not available" });
-    const [declined] = await db.update(deliveryRequests).set({ status: "cancelled", respondedAt: new Date() })
+    const [declined] = await db.update(deliveryRequests).set({ status: "cancelled", declineReason: parsed.data.reason, respondedAt: new Date() })
       .where(and(eq(deliveryRequests.id, request.id), eq(deliveryRequests.status, "offered"))).returning();
     if (!declined) return res.status(409).json({ message: "Delivery offer was already answered" });
     return res.json({ request: declined });
@@ -4480,11 +4482,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     for (const offer of expiredRows) await db.update(deliveryRequests).set({ status: "expired", respondedAt: new Date() }).where(eq(deliveryRequests.id, offer.id));
     const offers = await Promise.all(offeredRows.filter((offer) => isDeliveryOfferAcceptable(offer)).map(async (offer) => {
       const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, offer.deliveryId)).limit(1);
-      return { ...offer, delivery: delivery ? {
+      const [order] = delivery ? await db.select().from(orders).where(eq(orders.id, delivery.orderId)).limit(1) : [];
+      const itemCount = Array.isArray(order?.items) ? order.items.reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0) : 0;
+      const routeKm = delivery ? distanceKm(delivery.pickupLatitude, delivery.pickupLongitude, delivery.dropoffLatitude, delivery.dropoffLongitude) : 0;
+      return { ...offer, itemCount, routeKm: Number.isFinite(routeKm) ? routeKm : null, estimatedMinutes: Number.isFinite(routeKm) ? estimateDeliveryEtaMinutes(routeKm) : null, paymentMethod: order?.paymentMethod || null, delivery: delivery ? {
         id: delivery.id,
         pickupAddress: delivery.pickupAddress,
         pickupLatitude: delivery.pickupLatitude,
         pickupLongitude: delivery.pickupLongitude,
+        dropoffAddress: delivery.dropoffAddress,
+        dropoffLatitude: delivery.dropoffLatitude,
+        dropoffLongitude: delivery.dropoffLongitude,
         deliveryFee: delivery.deliveryFee,
       } : null };
     }));
@@ -4492,8 +4500,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const history = await db.select().from(deliveries).where(eq(deliveries.riderId, user.id)).orderBy(desc(deliveries.createdAt)).limit(50);
     const earningRows = await db.select().from(riderEarnings).where(eq(riderEarnings.riderId, user.id)).orderBy(desc(riderEarnings.createdAt)).limit(50);
     const totalEarnings = earningRows.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const todayDeliveries = history.filter((delivery) => delivery.deliveredAt && new Date(delivery.deliveredAt) >= todayStart);
+    const todayEarnings = earningRows.filter((earning) => earning.createdAt && new Date(earning.createdAt) >= todayStart).reduce((sum, earning) => sum + Number(earning.amount || 0), 0);
+    const answered = await db.select().from(deliveryRequests).where(eq(deliveryRequests.riderId, user.id)).orderBy(desc(deliveryRequests.createdAt)).limit(200);
+    const acceptedCount = answered.filter((request) => request.status === "accepted").length;
+    const respondedCount = answered.filter((request) => ["accepted", "cancelled"].includes(request.status)).length;
     const completion = await computeProfileCompletion(user);
-    return res.json({ profile: safeRiderProfile(profile), offers, activeDeliveries, history, earnings: earningRows, totalEarnings, completion, metrics: { completed: profile?.completedDeliveries || 0, rating: profile?.rating || 0 } });
+    return res.json({ profile: safeRiderProfile(profile), offers, activeDeliveries, history, earnings: earningRows, totalEarnings, completion, metrics: { completed: profile?.completedDeliveries || 0, rating: profile?.rating || 0, todayCompleted: todayDeliveries.length, todayEarnings, acceptanceRate: respondedCount ? Math.round((acceptedCount / respondedCount) * 100) : 100 } });
+  });
+
+  app.get("/api/rider/safety/incidents", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    return res.json(await db.select().from(riderSafetyIncidents).where(eq(riderSafetyIncidents.riderId, user.id)).orderBy(desc(riderSafetyIncidents.createdAt)).limit(50));
+  });
+
+  app.post("/api/rider/safety/incidents", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const body = z.object({
+        deliveryId: z.string().uuid().optional(),
+        type: z.enum(["sos", "accident", "unsafe_customer", "vehicle_problem", "road_hazard", "other"]),
+        severity: z.enum(["normal", "high", "critical"]).default("high"),
+        description: z.string().trim().min(5).max(2000),
+        latitude: z.number().min(-90).max(90).optional(),
+        longitude: z.number().min(-180).max(180).optional(),
+      }).refine((value) => (value.latitude == null) === (value.longitude == null), { message: "Location coordinates must be supplied together" }).parse(req.body);
+      if (body.deliveryId) {
+        const [delivery] = await db.select().from(deliveries).where(eq(deliveries.id, body.deliveryId)).limit(1);
+        if (!canRiderAccessDelivery(user.id, delivery)) return res.status(403).json({ message: "This incident is not connected to your active delivery" });
+      }
+      const [incident] = await db.insert(riderSafetyIncidents).values({ riderId: user.id, ...body }).returning();
+      await notifyAdminUsers("rider_safety", body.type === "sos" ? "Rider SOS alert" : "Rider safety incident", `${user.name}: ${body.description}`, "/operations", { incidentId: incident.id, riderId: user.id, deliveryId: body.deliveryId });
+      emitRealtime("rider:safety", { ...incident, riderName: user.name }, ["role:admin"]);
+      return res.status(201).json(incident);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: error.errors[0]?.message || "Invalid safety report" });
+      return res.status(500).json({ message: "Safety report could not be sent" });
+    }
   });
 
   app.post("/api/rider/location", requireAuth, requireRole("delivery_rider"), async (req: Request, res: Response) => {
