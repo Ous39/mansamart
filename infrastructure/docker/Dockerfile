@@ -21,6 +21,8 @@ COPY packages/validation/package.json packages/validation/package.json
 COPY packages/business-logic/package.json packages/business-logic/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
-RUN chmod +x infrastructure/docker/*.sh
+RUN pnpm --filter @mansamart/database build
+RUN sed -i 's/\r$//' infrastructure/docker/*.sh \
+  && chmod +x infrastructure/docker/*.sh
 EXPOSE 5000 4173 4174 8081 8082 8083
 CMD ["pnpm", "dev:api"]
